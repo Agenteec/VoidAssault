@@ -1,0 +1,6 @@
+[submodule "VoidAssault/external/raylib"]
+	path = VoidAssault/external/raylib
+	url = https://github.com/raysan5/raylib.git
+[submodule "VoidAssault/external/enet"]
+	path = VoidAssault/external/enet
+	url = https://github.com/zpl-c/enet.git
