@@ -1,22 +1,84 @@
-﻿// client\CMakeLists.txt
-﻿if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR LINUX)
-    file(GLOB CLIENT_SOURCES "*.cpp" "Scenes/*.cpp")
+
+// merged.txt
+
+// reader.py
+import os
+
+def merge_files(root_dir, output_file, extensions=None):
+    """
+    Рекурсивно считывает все файлы из root_dir и записывает в один файл.
+    Перед каждым файлом вставляется комментарий с его путём.
+    extensions — список расширений, если нужно фильтровать (например ['.h', '.cpp'])
+    Если extensions=None — берутся все файлы.
+    """
+    with open(output_file, "w", encoding="utf-8") as out:
+        for folder, _, files in os.walk(root_dir):
+            for file in files:
+                file_path = os.path.join(folder, file)
+                rel_path = os.path.relpath(file_path, root_dir)
+                
+                # Фильтр по расширениям, если нужно
+                if extensions is not None:
+                    _, ext = os.path.splitext(file)
+                    if ext.lower() not in extensions:
+                        continue
+
+                out.write(f"\n// {rel_path}\n")
+
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        out.write(f.read())
+                except Exception as e:
+                    out.write(f"[Ошибка при чтении файла: {e}]\n")
+
+
+if __name__ == "__main__":
+    merge_files(
+        root_dir=".", 
+        output_file="merged.txt",
+        extensions=None 
+    )
+
+// client\CMakeLists.txt
+﻿file(GLOB CLIENT_SOURCES "*.cpp" "Scenes/*.cpp")
+
+if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR LINUX)
     add_executable(GameClient
         ${CLIENT_SOURCES}
      "scenes/GameplayScene.cpp" 
-     "scenes/MainMenuScene.cpp")
+     "scenes/MainMenuScene.cpp"
+         "scenes/GameplayScene.h" 
+     "scenes/MainMenuScene.h"
+    )
 
-    if(WIN32)
-        set_target_properties(GameClient PROPERTIES WIN32_EXECUTABLE ON)
-    endif()
-
-    target_link_libraries(GameClient PRIVATE raylib GameEngine GameCommon enet::enet_shared)
-
-    target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
-    target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
+    #if(WIN32)
+      #  set_target_properties(GameClient PROPERTIES WIN32_EXECUTABLE ON)
+    #endif()
 
     file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+elseif(ANDROID)
+       add_library(GameClient SHARED
+        ${CLIENT_SOURCES}
+     "scenes/GameplayScene.cpp" 
+     "scenes/MainMenuScene.cpp"
+         "scenes/GameplayScene.h" 
+     "scenes/MainMenuScene.h"
+    )
+    target_link_libraries(GameClient
+        android
+        log
+)
 endif()
+
+
+target_link_libraries(GameClient PRIVATE raylib GameEngine GameCommon enet::enet_shared)
+target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
+target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
+target_include_directories(GameClient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
+
+
+
+
 // client\config.h
 ﻿// client/config.h
 #pragma once
@@ -163,7 +225,8 @@ public:
     int GetHeight() const { return GetScreenHeight(); }
 };
 // client\main_client.cpp
-﻿#include "GameClient.h"
+﻿#define RAYGUI_IMPLEMENTATION
+#include "GameClient.h"
 
 int main() {
     GameClient game;
@@ -561,13 +624,13 @@ public:
     void Draw() override;
     void DrawGUI() override;
 };
-// common\CMakeLIsts.txt
-add_library(GameCommon SHARED
+// common\CMakeLists.txt
+﻿add_library(GameCommon SHARED
     NetworkPackets.h Common.cpp
 )
 
 target_link_libraries(GameCommon PUBLIC enet::enet_shared raylib)
-
+target_include_directories(GameCommon PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameCommon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 // common\Common.cpp
 
@@ -644,6 +707,7 @@ add_library(GameEngine SHARED
 
 target_compile_definitions(GameEngine PRIVATE PHYSAC_NO_THREADS)
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
+target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
 target_link_libraries(GameEngine PUBLIC chipmunk_static GameCommon enet::enet_shared raylib)
 target_include_directories(GameEngine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -714,11 +778,9 @@ void ServerHost::Stop() {
 
 void ServerHost::ServerLoop() {
     std::cout << "Server started loop.\n";
-
-    // 60 тиков в секунду
     const double dt = 1.0 / 60.0;
     double accumulator = 0.0;
-    double lastTime = GetTime(); // Raylib Time
+    double lastTime = GetTime();
 
     while (running) {
         double currentTime = GetTime();
@@ -732,10 +794,8 @@ void ServerHost::ServerLoop() {
             case ENET_EVENT_TYPE_CONNECT: {
                 std::cout << "A new client connected from " << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
 
-                // Создаем игрока и отправляем ему ID
                 auto player = gameScene.CreatePlayer();
 
-                // Сохраняем ID в data пира
                 event.peer->data = (void*)(uintptr_t)player->id;
 
                 InitPacket initPkt;
@@ -1144,9 +1204,6 @@ public:
 };
 // engine\Scenes\Scene.h
 ﻿#pragma once
-#if defined(_WIN32)
-#include "fix_win32_compatibility.h"
-#endif
 
 #include "raylib.h"
 #include <vector>
@@ -1174,7 +1231,7 @@ public:
 add_executable(GameServer
     main_server.cpp
 )
-
+target_include_directories(GameServer PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_link_libraries(GameServer PRIVATE GameEngine GameCommon enet::enet_shared)
 
 // server\main_server.cpp

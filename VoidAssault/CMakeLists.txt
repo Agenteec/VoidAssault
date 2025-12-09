@@ -29,6 +29,14 @@ if(WIN32)
     add_compile_definitions(NOMINMAX)
 
 endif()
+if(ANDROID)
+    message(STATUS "Building for Android platform")
+    string(REGEX MATCH "android-([0-9]+)" _ ${ANDROID_PLATFORM} FORCE)
+    set(ANDROID_API_VERSION ${CMAKE_MATCH_1} CACHE STRING "" FORCE)
+    set(ANDROID_ARCH ${CMAKE_ANDROID_ARCH} CACHE STRING "" FORCE)
+    set(PLATFORM "Android" CACHE STRING "" FORCE)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")
+endif()
 add_subdirectory(external/raylib)
 add_subdirectory(external/enet)
 add_subdirectory(external/Chipmunk2D)
@@ -43,22 +51,3 @@ add_subdirectory(src/engine)
 add_subdirectory(src/server)
 add_subdirectory(src/client)
 add_subdirectory(src/common)
-
-if(ANDROID)
-
-    string(REGEX MATCH "android-([0-9]+)" _ ${ANDROID_PLATFORM} FORCE)
-    set(ANDROID_API_VERSION ${CMAKE_MATCH_1} CACHE STRING "" FORCE)
-    set(ANDROID_ARCH ${CMAKE_ANDROID_ARCH} CACHE STRING "" FORCE)
-    set(PLATFORM "Android" CACHE STRING "" FORCE)
-    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")
-endif()
-
-
-
-
-if(ANDROID)
-    target_link_libraries(${CMAKE_PROJECT_NAME}
-            raylib
-            android
-            log)
-endif()

@@ -54,7 +54,7 @@ void ServerHost::ServerLoop() {
         while (enet_host_service(server, &event, 0) > 0) {
             switch (event.type) {
             case ENET_EVENT_TYPE_CONNECT: {
-                std::cout << "A new client connected from " << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
+                std::cout << "A new client connected from...\n";// << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
 
                 auto player = gameScene.CreatePlayer();
 

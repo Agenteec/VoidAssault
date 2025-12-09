@@ -16,3 +16,7 @@ target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
 target_link_libraries(GameEngine PUBLIC chipmunk_static GameCommon enet::enet_shared raylib)
 target_include_directories(GameEngine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(ANDROID)
+    target_link_libraries(GameEngine PRIVATE log)
+endif()
