@@ -10,7 +10,6 @@ add_library(GameEngine SHARED
  ServerHost.cpp
 )
 
-target_compile_definitions(GameEngine PRIVATE PHYSAC_NO_THREADS)
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 

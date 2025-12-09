@@ -40,41 +40,50 @@ if __name__ == "__main__":
     )
 
 // client\CMakeLists.txt
-﻿file(GLOB CLIENT_SOURCES "*.cpp" "Scenes/*.cpp")
+﻿
+file(GLOB CLIENT_SOURCES 
+    "*.cpp" 
+    "Scenes/*.cpp"
+    "raygui_impl.cpp" 
+)
 
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR LINUX)
-    add_executable(GameClient
-        ${CLIENT_SOURCES}
-     "scenes/GameplayScene.cpp" 
-     "scenes/MainMenuScene.cpp"
-         "scenes/GameplayScene.h" 
-     "scenes/MainMenuScene.h"
-    )
+    add_executable(GameClient ${CLIENT_SOURCES})
 
-    #if(WIN32)
-      #  set_target_properties(GameClient PROPERTIES WIN32_EXECUTABLE ON)
-    #endif()
+    if(WIN32)
+        target_compile_definitions(GameClient PRIVATE NOGDI)
+        if(MSVC)
+            set_target_properties(GameClient PROPERTIES LINK_FLAGS "/SUBSYSTEM:CONSOLE")
+        endif()
+    endif()
+    target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
+    target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
 
-    file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
-elseif(ANDROID)
-       add_library(GameClient SHARED
-        ${CLIENT_SOURCES}
-     "scenes/GameplayScene.cpp" 
-     "scenes/MainMenuScene.cpp"
-         "scenes/GameplayScene.h" 
-     "scenes/MainMenuScene.h"
-    )
-    target_link_libraries(GameClient
-        android
-        log
+    target_include_directories(GameClient PUBLIC "${CMAKE_SOURCE_DIR}/external")
+    target_link_libraries(GameClient PRIVATE 
+    raylib
+    GameEngine 
+    GameCommon
 )
+
+    #file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+elseif(ANDROID)
+    add_library(gameclient SHARED ${CLIENT_SOURCES})
+
+    target_link_libraries(gameclient  PRIVATE android log
+        raylib
+    GameEngine 
+    GameCommon
+    enet::enet_shared
+    chipmunk_static)
+    target_include_directories(gameclient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
+target_include_directories(gameclient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
+
+target_include_directories(gameclient PUBLIC "${CMAKE_SOURCE_DIR}/external")
 endif()
 
 
-target_link_libraries(GameClient PRIVATE raylib GameEngine GameCommon enet::enet_shared)
-target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
-target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
-target_include_directories(GameClient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
 
 
@@ -95,7 +104,7 @@ target_include_directories(GameClient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 #endif
 // client\GameClient.cpp
 ﻿#include "GameClient.h"
-#include "Scenes/MainMenuScene.h" 
+#include "scenes/MainMenuScene.h" 
 
 
 
@@ -711,6 +720,10 @@ target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
 target_link_libraries(GameEngine PUBLIC chipmunk_static GameCommon enet::enet_shared raylib)
 target_include_directories(GameEngine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(ANDROID)
+    target_link_libraries(GameEngine PRIVATE log)
+endif()
 // engine\PhysicsUtils.h
 ﻿#pragma once
 #include "raylib_compatibility.h"
@@ -792,7 +805,7 @@ void ServerHost::ServerLoop() {
         while (enet_host_service(server, &event, 0) > 0) {
             switch (event.type) {
             case ENET_EVENT_TYPE_CONNECT: {
-                std::cout << "A new client connected from " << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
+                std::cout << "A new client connected from...\n";// << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
 
                 auto player = gameScene.CreatePlayer();
 
