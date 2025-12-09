@@ -1,12 +1,64 @@
-﻿# CMakeList.txt: проект CMake для VoidAssault; включите исходный код и определения,
-# укажите здесь логику для конкретного проекта.
-#
+﻿project ("VoidAssault" VERSION 0.1 LANGUAGES CXX C)
 
-# Добавьте источник в исполняемый файл этого проекта.
-add_executable (VoidAssault "VoidAssault.cpp" "VoidAssault.h")
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(BUILD_SHARED_LIBS ON)
+set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
 
-if (CMAKE_VERSION VERSION_GREATER 3.12)
-  set_property(TARGET VoidAssault PROPERTY CXX_STANDARD 20)
+set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(ENET_TEST OFF CACHE BOOL "Build enet tests" FORCE)
+set(ENET_STATIC OFF CACHE BOOL "Build enet as a static library" FORCE)
+set(ENET_SHARED ON CACHE BOOL "Build enet as a shared library" FORCE)
+
+set(BUILD_DEMOS OFF CACHE BOOL "" FORCE)
+set(INSTALL_CHIPMUNK OFF CACHE BOOL "" FORCE)
+
+set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(BUILD_STATIC ON CACHE BOOL "" FORCE)
+
+set(GLOBAL_OUTPUT_DIR "${CMAKE_BINARY_DIR}/bin")
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${GLOBAL_OUTPUT_DIR})
+
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${GLOBAL_OUTPUT_DIR})
+
+if(WIN32)
+    add_compile_definitions(ENET_DLL)
+    add_compile_definitions(NOMINMAX)
+
+endif()
+add_subdirectory(external/raylib)
+add_subdirectory(external/enet)
+add_subdirectory(external/Chipmunk2D)
+
+set(RAYGUI_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/raygui")
+set(FIX_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/fix")
+set(ENET_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/enet/include")
+set(CHIPMUNK2D_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/Chipmunk2D/include")
+
+
+add_subdirectory(src/engine)
+add_subdirectory(src/server)
+add_subdirectory(src/client)
+add_subdirectory(src/common)
+
+if(ANDROID)
+
+    string(REGEX MATCH "android-([0-9]+)" _ ${ANDROID_PLATFORM} FORCE)
+    set(ANDROID_API_VERSION ${CMAKE_MATCH_1} CACHE STRING "" FORCE)
+    set(ANDROID_ARCH ${CMAKE_ANDROID_ARCH} CACHE STRING "" FORCE)
+    set(PLATFORM "Android" CACHE STRING "" FORCE)
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -u ANativeActivity_onCreate")
 endif()
 
-# TODO: Добавьте тесты и целевые объекты, если это необходимо.
+
+
+
+if(ANDROID)
+    target_link_libraries(${CMAKE_PROJECT_NAME}
+            raylib
+            android
+            log)
+endif()
