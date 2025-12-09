@@ -41,6 +41,7 @@ endif()
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 add_subdirectory(external/raylib)
+add_subdirectory(external/json)
 add_subdirectory(external/enet)
 add_subdirectory(external/Chipmunk2D)
 
@@ -54,3 +55,4 @@ add_subdirectory(src/engine)
 add_subdirectory(src/server)
 add_subdirectory(src/client)
 add_subdirectory(src/common)
+
