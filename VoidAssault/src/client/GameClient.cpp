@@ -1,9 +1,11 @@
 ﻿#include "GameClient.h"
 #include "scenes/MainMenuScene.h" 
+#include "scenes/GameplayScene.h"
 
 
 
 GameClient::GameClient() {
+
     InitWindow(screenWidth, screenHeight, "Void Assault");
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
@@ -15,7 +17,6 @@ GameClient::GameClient() {
     if (!network.Init()) {
         TraceLog(LOG_ERROR, "Failed to create ENet client host");
     }
-
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 }
 
@@ -42,7 +43,17 @@ void GameClient::StartHost() {
         }
     }
 }
-
+void GameClient::StartHost(int port) {
+    if (!localServer) {
+        localServer = std::make_unique<ServerHost>();
+        if (localServer->Start(port)) {
+            TraceLog(LOG_INFO, "Local Server Started!");
+        }
+        else {
+            TraceLog(LOG_ERROR, "Failed to start local server!");
+        }
+    }
+}
 void GameClient::StopHost() {
     if (localServer) {
         localServer->Stop();
@@ -70,6 +81,7 @@ void GameClient::Run() {
             case ENET_EVENT_TYPE_CONNECT:
                 network.isConnected = true;
                 TraceLog(LOG_INFO, "Connected to server!");
+                ChangeScene(std::make_shared<GameplayScene>(this));
                 break;
             case ENET_EVENT_TYPE_DISCONNECT:
                 network.isConnected = false;

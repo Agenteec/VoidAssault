@@ -3,6 +3,7 @@
 #include "NetworkManager.h"
 #include "../engine/Scenes/Scene.h"
 #include "../engine/ServerHost.h"
+#include "AudioManager.h"
 #include <memory>
 
 class GameClient {
@@ -12,6 +13,7 @@ public:
 
     NetworkManager network;
     std::unique_ptr<ServerHost> localServer;
+    AudioManager audio;
 
     std::shared_ptr<Scene> currentScene;
     std::shared_ptr<Scene> nextScene;
@@ -21,8 +23,10 @@ public:
 
     void Run();
     void ChangeScene(std::shared_ptr<Scene> newScene);
+    void ReturnToMenu();
 
     void StartHost();
+    void StartHost(int port);
     void StopHost();
 
     int GetWidth() const { return GetScreenWidth(); }

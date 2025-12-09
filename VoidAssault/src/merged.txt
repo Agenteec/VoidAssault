@@ -39,34 +39,84 @@ if __name__ == "__main__":
         extensions=None 
     )
 
+// client\AudioManager.h
+﻿#pragma once
+#include "raylib.h"
+#include <map>
+#include <string>
+#include <iostream>
+
+class AudioManager {
+    std::map<std::string, Sound> sounds;
+    std::map<std::string, Music> musics;
+    float masterVolume = 1.0f;
+
+public:
+    AudioManager() {
+        InitAudioDevice();
+    }
+
+    ~AudioManager() {
+        for (auto& s : sounds) UnloadSound(s.second);
+        for (auto& m : musics) UnloadMusicStream(m.second);
+        CloseAudioDevice();
+    }
+
+    void LoadSnd(const std::string& key, const std::string& path) {
+        Sound s = LoadSound(path.c_str());
+        if (s.frameCount > 0) sounds[key] = s;
+        else std::cout << "Failed to load sound: " << path << std::endl;
+    }
+
+    void LoadMus(const std::string& key, const std::string& path) {
+        Music m = LoadMusicStream(path.c_str());
+        if (m.frameCount > 0) musics[key] = m;
+    }
+
+    void PlaySnd(const std::string& key) {
+        if (sounds.count(key)) {
+            SetSoundVolume(sounds[key], masterVolume);
+            PlaySound(sounds[key]);
+        }
+    }
+
+    void PlayMus(const std::string& key) {
+        if (musics.count(key)) {
+            if (!IsMusicStreamPlaying(musics[key])) PlayMusicStream(musics[key]);
+            SetMusicVolume(musics[key], masterVolume);
+            UpdateMusicStream(musics[key]);
+        }
+    }
+
+    void Update() {
+        for (auto& pair : musics) {
+            if (IsMusicStreamPlaying(pair.second)) UpdateMusicStream(pair.second);
+        }
+    }
+
+    void SetVolume(float vol) { masterVolume = vol; }
+    float GetVolume() const { return masterVolume; }
+};
 // client\CMakeLists.txt
-﻿
-file(GLOB CLIENT_SOURCES 
-    "*.cpp" 
-    "Scenes/*.cpp"
-    "raygui_impl.cpp" 
-)
-
+﻿    file(GLOB CLIENT_SOURCES "*.cpp" "scenes/*.cpp")
+#file(GLOB_RECURSE Imgui_SFML_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../imgui-sfml/*.*")
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR LINUX)
-    add_executable(GameClient ${CLIENT_SOURCES})
 
-    if(WIN32)
-        target_compile_definitions(GameClient PRIVATE NOGDI)
-        if(MSVC)
-            set_target_properties(GameClient PROPERTIES LINK_FLAGS "/SUBSYSTEM:CONSOLE")
-        endif()
-    endif()
+    add_executable(GameClient
+        ${CLIENT_SOURCES}
+    )
+
+    #if(WIN32)
+      #  set_target_properties(GameClient PROPERTIES WIN32_EXECUTABLE ON)
+    #endif()
+
+    target_link_libraries(GameClient PRIVATE raylib GameEngine GameCommon enet::enet_shared nlohmann_json)
+
+    target_include_directories(GameClient PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
     target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
-
-    target_include_directories(GameClient PUBLIC "${CMAKE_SOURCE_DIR}/external")
-    target_link_libraries(GameClient PRIVATE 
-    raylib
-    GameEngine 
-    GameCommon
-)
-
-    #file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    target_include_directories(GameClient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
+    file(COPY ${CMAKE_SOURCE_DIR}/assets DESTINATION ${GLOBAL_OUTPUT_DIR})
 
 elseif(ANDROID)
     add_library(gameclient SHARED ${CLIENT_SOURCES})
@@ -76,9 +126,12 @@ elseif(ANDROID)
     GameEngine 
     GameCommon
     enet::enet_shared
-    chipmunk_static)
-    target_include_directories(gameclient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
-target_include_directories(gameclient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
+    chipmunk_static
+    nlohmann_json)
+    target_include_directories(GameClient PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_include_directories(GameClient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
+    target_include_directories(GameClient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
+    target_include_directories(GameClient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
 target_include_directories(gameclient PUBLIC "${CMAKE_SOURCE_DIR}/external")
 endif()
@@ -88,27 +141,15 @@ endif()
 
 
 
-// client\config.h
-﻿// client/config.h
-#pragma once
-
-// Общие настройки для клиента
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#endif
 // client\GameClient.cpp
 ﻿#include "GameClient.h"
 #include "scenes/MainMenuScene.h" 
+#include "scenes/GameplayScene.h"
 
 
 
 GameClient::GameClient() {
+
     InitWindow(screenWidth, screenHeight, "Void Assault");
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
@@ -120,7 +161,7 @@ GameClient::GameClient() {
     if (!network.Init()) {
         TraceLog(LOG_ERROR, "Failed to create ENet client host");
     }
-
+    AppConfig::LoadResources();
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 }
 
@@ -147,7 +188,17 @@ void GameClient::StartHost() {
         }
     }
 }
-
+void GameClient::StartHost(int port) {
+    if (!localServer) {
+        localServer = std::make_unique<ServerHost>();
+        if (localServer->Start(port)) {
+            TraceLog(LOG_INFO, "Local Server Started!");
+        }
+        else {
+            TraceLog(LOG_ERROR, "Failed to start local server!");
+        }
+    }
+}
 void GameClient::StopHost() {
     if (localServer) {
         localServer->Stop();
@@ -208,6 +259,7 @@ void GameClient::Run() {
 #include "NetworkManager.h"
 #include "../engine/Scenes/Scene.h"
 #include "../engine/ServerHost.h"
+#include "AudioManager.h"
 #include <memory>
 
 class GameClient {
@@ -217,6 +269,7 @@ public:
 
     NetworkManager network;
     std::unique_ptr<ServerHost> localServer;
+    AudioManager audio;
 
     std::shared_ptr<Scene> currentScene;
     std::shared_ptr<Scene> nextScene;
@@ -226,8 +279,10 @@ public:
 
     void Run();
     void ChangeScene(std::shared_ptr<Scene> newScene);
+    void ReturnToMenu();
 
     void StartHost();
+    void StartHost(int port);
     void StopHost();
 
     int GetWidth() const { return GetScreenWidth(); }
@@ -236,9 +291,17 @@ public:
 // client\main_client.cpp
 ﻿#define RAYGUI_IMPLEMENTATION
 #include "GameClient.h"
+#include "engine/Utils/ConfigManager.h"
 
 int main() {
+    ConfigManager::Initialize("./");
     GameClient game;
+
+
+    SetTargetFPS(ConfigManager::GetClient().targetFPS);
+    if (ConfigManager::GetClient().fullscreen) {
+        ToggleFullscreen();
+    }
     game.Run();
     return 0;
 }
@@ -408,10 +471,190 @@ namespace Theme {
     static const float OUTLINE_THICKNESS = 3.0f;
     static const float BARREL_WIDTH_RATIO = 0.45f;
 }
+// client\VirtualJoystick.cpp
+﻿#include "VirtualJoystick.h"
+#include "raymath.h"
+
+#ifndef MAX_TOUCH_POINTS
+#define MAX_TOUCH_POINTS 10
+#endif
+
+VirtualJoystick::VirtualJoystick() {
+
+}
+
+VirtualJoystick::VirtualJoystick(Vector2 pos, float rStick, float rBody) {
+    position = pos;
+    stickPosition = pos;
+    radiusStick = rStick;
+    radiusBody = rBody;
+    radiusInteraction = rBody * 1.5f;
+}
+
+void VirtualJoystick::SetPosition(Vector2 pos) {
+    position = pos;
+    if (!dragging) {
+        stickPosition = pos;
+    }
+}
+
+void VirtualJoystick::SetPosition(float x, float y) {
+    SetPosition({ x, y });
+}
+
+bool VirtualJoystick::IsTouchInBounds(Vector2 touchPos) const {
+    return Vector2Distance(touchPos, position) <= radiusInteraction;
+}
+
+void VirtualJoystick::Update() {
+    bool inputFound = false;
+    Vector2 inputPos = { 0, 0 };
+
+
+    if (dragging) {
+        if (touchId == -2) {
+            if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+                inputPos = GetMousePosition();
+                inputFound = true;
+            }
+        }
+        else {
+            if (touchId < GetTouchPointCount()) {
+                inputPos = GetTouchPosition(touchId);
+                inputFound = true;
+            }
+        }
+
+        if (!inputFound) {
+            Reset();
+            return;
+        }
+    }
+    else {
+        int count = GetTouchPointCount();
+        for (int i = 0; i < count && i < MAX_TOUCH_POINTS; i++) {
+            Vector2 touchPos = GetTouchPosition(i);
+            if (IsTouchInBounds(touchPos)) {
+                dragging = true;
+                touchId = i;
+                inputPos = touchPos;
+                inputFound = true;
+                break;
+            }
+        }
+
+        if (!inputFound && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
+            Vector2 mousePos = GetMousePosition();
+            if (IsTouchInBounds(mousePos)) {
+                dragging = true;
+                touchId = -2;
+                inputPos = mousePos;
+                inputFound = true;
+            }
+        }
+    }
+
+    if (dragging) {
+        Vector2 direction = Vector2Subtract(inputPos, position);
+        float distance = Vector2Length(direction);
+
+        if (distance > radiusBody) {
+            direction = Vector2Scale(Vector2Normalize(direction), radiusBody);
+            stickPosition = Vector2Add(position, direction);
+        }
+        else {
+            stickPosition = inputPos;
+        }
+
+        if (radiusBody > 0) {
+            axis = Vector2Scale(direction, 1.0f / radiusBody);
+        }
+
+        if (Vector2Length(axis) > 1.0f) {
+            axis = Vector2Normalize(axis);
+        }
+    }
+    else {
+        Reset();
+    }
+}
+
+void VirtualJoystick::Reset() {
+    stickPosition = position;
+    dragging = false;
+    touchId = -1;
+    axis = { 0, 0 };
+}
+
+void VirtualJoystick::Draw() {
+
+    DrawCircleV(position, radiusBody, colorBody);
+    DrawRing(position, radiusBody, radiusBody + 2, 0, 360, 24, Fade(colorBody, 0.8f));
+
+    DrawCircleV(stickPosition, radiusStick, colorStick);
+
+    if (dragging) {
+        DrawCircleV(stickPosition, radiusStick * 0.8f, Fade(WHITE, 0.3f));
+    }
+}
+// client\VirtualJoystick.h
+﻿#pragma once
+#include <raylib.h>
+
+class VirtualJoystick {
+public:
+    VirtualJoystick();
+    VirtualJoystick(Vector2 pos, float radiusStick, float radiusBody);
+
+    void Update();
+    void Draw();
+    void Reset();
+
+
+    Vector2 GetAxis() const { return axis; }
+
+    const Vector2& GetPosition() const { return position; }
+    void SetPosition(Vector2 pos);
+    void SetPosition(float x, float y);
+
+    bool IsDragging() const { return dragging; }
+
+
+    void SetColors(Color body, Color stick) {
+        colorBody = body;
+        colorStick = stick;
+    }
+
+    void SetRadii(float body, float stick, float interaction) {
+        radiusBody = body;
+        radiusStick = stick;
+        radiusInteraction = interaction;
+    }
+
+private:
+    int touchId = -1;
+    bool dragging = false;
+
+    Vector2 position = { 0, 0 };
+    Vector2 stickPosition = { 0, 0 };
+    Vector2 axis = { 0, 0 };
+
+
+    float radiusStick = 20.0f;
+    float radiusBody = 50.0f;
+    float radiusInteraction = 60.0f;
+
+
+    Color colorStick = { 200, 200, 200, 255 };
+    Color colorBody = { 50, 50, 50, 150 };
+
+
+    bool IsTouchInBounds(Vector2 touchPos) const;
+};
 // client\scenes\GameplayScene.cpp
 ﻿#include "GameplayScene.h"
-#include "MainMenuScene.h" // Теперь это безопасно
-
+#include "MainMenuScene.h"
+#include "../GameClient.h"
 GameplayScene::GameplayScene(GameClient* g) : Scene(g) {}
 
 void GameplayScene::Enter() {
@@ -451,16 +694,44 @@ void GameplayScene::OnPacketReceived(const uint8_t* data, size_t size) {
 }
 
 void GameplayScene::Update(float dt) {
+
+    leftStick->Update();
+    rightStick->Update();
+
     PlayerInputPacket pkt;
     pkt.type = PacketType::client_INPUT;
-    pkt.movement = { 0, 0 };
+
+
+    Vector2 moveDir = leftStick->GetAxis();
+    pkt.movement = moveDir;
+
+
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
     if (IsKeyDown(KEY_D)) pkt.movement.x += 1.0f;
 
-    pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
-    pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+    if (Vector2Length(pkt.movement) > 1.0f) {
+        pkt.movement = Vector2Normalize(pkt.movement);
+    }
+
+    Vector2 aimDir = rightStick->GetAxis();
+
+    if (Vector2Length(aimDir) > 0.2f) {
+        pkt.isShooting = true;
+
+        if (worldEntities.count(myPlayerId)) {
+            Vector2 playerPos = worldEntities[myPlayerId].renderPos;
+            pkt.aimTarget = Vector2Add(playerPos, Vector2Scale(aimDir, 200.0f));
+        }
+        else {
+            pkt.aimTarget = Vector2Scale(aimDir, 200.0f);
+        }
+    }
+    else {
+        pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
+        pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+    }
 
     game->network.SendInput(pkt);
 
@@ -506,8 +777,8 @@ void GameplayScene::DrawGUI() {
     if (!game->network.isConnected) {
         DrawText("Connecting to server...", game->GetWidth() / 2 - 100, 20, 20, RED);
     }
-
-    // Здесь конфликтов больше быть не должно, так как raygui_wrapper подчистил макросы
+    leftStick->Draw();
+    rightStick->Draw();
     if (GuiButton(Rectangle{ (float)game->GetWidth() - 100, 10, 90, 30 }, "DISCONNECT")) {
         game->ChangeScene(std::make_shared<MainMenuScene>(game));
     }
@@ -515,19 +786,21 @@ void GameplayScene::DrawGUI() {
 // client\scenes\GameplayScene.h
 ﻿#pragma once
 #include "../../engine/Scenes/Scene.h"
-#include "../../client/GameClient.h"
 #include "../../common/NetworkPackets.h"
 #include "../ParticleSystem.h"
+#include "../VirtualJoystick.h"
 #include "raymath.h"
 #include <map>
 #include <vector>
-
+#include <memory>
+class GameClient;
 struct InterpolatedEntity {
     EntityState current;
     EntityState previous;
     float lastUpdateTime;
     Vector2 renderPos;
     float renderRot;
+
 
     InterpolatedEntity() : lastUpdateTime(0), renderRot(0) {}
 
@@ -553,6 +826,9 @@ class GameplayScene : public Scene {
     Camera2D camera = { 0 };
     std::map<uint32_t, InterpolatedEntity> worldEntities;
     uint32_t myPlayerId = 0;
+    std::unique_ptr<VirtualJoystick> leftStick;
+    std::unique_ptr<VirtualJoystick> rightStick;
+
 
 public:
     GameplayScene(GameClient* g);
@@ -566,63 +842,159 @@ public:
     void DrawGUI() override;
 };
 // client\scenes\MainMenuScene.cpp
-﻿#include "../raygui_wrapper.h"
-#include "MainMenuScene.h"
-#include "GameplayScene.h"
-#include "../../client/ResourceManager.h"
-#include "../../client/Theme.h"
+﻿#include "MainMenuScene.h"
+#include "raygui.h"
+#include "GameClient.h"
+#include "engine/Utils/ConfigManager.h"
+enum MenuState { MAIN, MULTIPLAYER, SETTINGS };
+
+enum MultiTab { ONLINE_LIST, DIRECT_CONNECT };
+
+MenuState currentMenuState = MAIN;
+MultiTab currentMultiTab = DIRECT_CONNECT;
+
+
+char ipBuffer[64] = "127.0.0.1";
+char portBuffer[8] = "7777";
+char nameBuffer[32] = "Player";
+bool isEditingIp = false;
+bool isEditingPort = false;
+bool isEditingName = false;
+
 
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
 
 void MainMenuScene::Draw() {
-    ClearBackground(Theme::BG_COLOR);
-    float time = (float)GetTime() * 20.0f;
-    for (int x = 0; x < game->GetWidth(); x += 50)
-        DrawLine(x + (int)time % 50, 0, x + (int)time % 50, game->GetHeight(), Fade(Theme::GRID_COLOR, 0.5f));
+    ClearBackground(GetColor(0x181818FF));
+
+    int w = GetScreenWidth();
+    int h = GetScreenHeight();
+
 
     const char* title = "VOID ASSAULT";
-    int fontSize = 80;
-    int cx = game->GetWidth() / 2;
-    int cy = 150;
+    DrawText(title, w / 2 - MeasureText(title, 60) / 2, 50, 60, WHITE);
 
-    ResourceManager::DrawTextCentered(title, cx + 4, cy + 4, fontSize, Fade(BLACK, 0.3f));
-    ResourceManager::DrawTextCentered(title, cx, cy, fontSize, Theme::COLOR_BLUE);
+    if (currentMenuState == MAIN) {
+        float btnW = 300;
+        float btnH = 50;
+        float startY = 200;
+        float spacing = 70;
 
-    DrawText("WASD to Move, LMB to Shoot", cx - 100, game->GetHeight() - 50, 20, DARKGRAY);
+        if (GuiButton({ (float)w / 2 - btnW / 2, startY, btnW, btnH }, AppConfig::GetText("play_single"))) {
+            ServerConfig& sCfg = ConfigManager::GetServer();
+            game->StartHost(sCfg.port);
+            game->StartHost();
+        }
+
+        // Кнопка Сетевая игра
+        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing, btnW, btnH }, AppConfig::GetText("multiplayer"))) {
+            currentMenuState = MULTIPLAYER;
+            // Копируем текущие настройки в буферы для редактирования
+            strcpy(ipBuffer, AppConfig::settings.serverIp.c_str());
+            sprintf(portBuffer, "%d", AppConfig::settings.serverPort);
+            strcpy(nameBuffer, AppConfig::settings.playerName.c_str());
+        }
+
+        // Кнопка Настройки
+        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 2, btnW, btnH }, AppConfig::GetText("settings"))) {
+            currentMenuState = SETTINGS;
+        }
+
+        // Выход
+        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 3, btnW, btnH }, "EXIT")) {
+            CloseWindow();
+        }
+    }
+    else if (currentMenuState == MULTIPLAYER) {
+        // --- МЕНЮ СЕТЕВОЙ ИГРЫ ---
+
+        // Вкладки
+        float tabW = 200;
+        if (GuiButton({ (float)w / 2 - tabW - 10, 150, tabW, 40 }, AppConfig::GetText("tab_online"))) {
+            currentMultiTab = ONLINE_LIST;
+        }
+        if (GuiButton({ (float)w / 2 + 10, 150, tabW, 40 }, AppConfig::GetText("tab_direct"))) {
+            currentMultiTab = DIRECT_CONNECT;
+        }
+
+        // Поле имени игрока (общее)
+        GuiLabel({ (float)w / 2 - 150, 210, 300, 20 }, AppConfig::GetText("enter_name"));
+        if (GuiTextBox({ (float)w / 2 - 150, 230, 300, 30 }, nameBuffer, 32, isEditingName)) {
+            isEditingName = !isEditingName;
+            AppConfig::settings.playerName = std::string(nameBuffer);
+        }
+
+        if (currentMultiTab == DIRECT_CONNECT) {
+            float startY = 300;
+
+            // Поле IP
+            GuiLabel({ (float)w / 2 - 150, startY, 300, 20 }, AppConfig::GetText("ip_addr"));
+            if (GuiTextBox({ (float)w / 2 - 150, startY + 20, 200, 30 }, ipBuffer, 64, isEditingIp)) {
+                isEditingIp = !isEditingIp;
+            }
+
+            // Поле Порт
+            GuiLabel({ (float)w / 2 + 60, startY, 90, 20 }, AppConfig::GetText("port"));
+            if (GuiTextBox({ (float)w / 2 + 60, startY + 20, 90, 30 }, portBuffer, 8, isEditingPort)) {
+                isEditingPort = !isEditingPort;
+            }
+
+            // Кнопка Подключиться
+            if (GuiButton({ (float)w / 2 - 150, startY + 80, 300, 40 }, AppConfig::GetText("connect"))) {
+                // Сохраняем введенные данные
+                AppConfig::settings.serverIp = std::string(ipBuffer);
+                AppConfig::settings.serverPort = atoi(portBuffer);
+
+                // Логика подключения
+                game->network.Connect(AppConfig::settings.serverIp, AppConfig::settings.serverPort);
+                // Переход в лобби/игру (обрабатывается в коллбэке сети, но пока так)
+                // game->ChangeScene(std::make_shared<LobbyScene>(game)); 
+            }
+
+            // Кнопка Создать Сервер (LAN)
+            if (GuiButton({ (float)w / 2 - 150, startY + 140, 300, 40 }, AppConfig::GetText("host"))) {
+                AppConfig::settings.serverPort = atoi(portBuffer);
+                game->StartHost();//AppConfig::settings.serverPort
+            }
+        }
+        else if (currentMultiTab == ONLINE_LIST) {
+            // Имитация списка серверов
+            GuiGroupBox({ (float)w / 2 - 200, 300, 400, 200 }, "Server Browser (Mockup)");
+            if (GuiButton({ (float)w / 2 - 180, 320, 360, 30 }, "Official Server EU [Ping: 45]")) {
+                game->network.Connect("185.x.x.x", 7777);
+            }
+            if (GuiButton({ (float)w / 2 - 180, 360, 360, 30 }, "Local Test [Ping: 1]")) {
+                game->network.Connect("127.0.0.1", 7777);
+            }
+        }
+
+        // Кнопка Назад
+        if (GuiButton({ 20, 20, 100, 40 }, AppConfig::GetText("back"))) {
+            currentMenuState = MAIN;
+        }
+    }
+    else if (currentMenuState == SETTINGS) {
+        // Смена языка
+        if (GuiButton({ (float)w / 2 - 100, 300, 200, 40 }, "Language: EN/RU")) {
+            if (AppConfig::settings.language == Language::RU) AppConfig::settings.language = Language::EN;
+            else AppConfig::settings.language = Language::RU;
+        }
+
+        if (GuiButton({ 20, 20, 100, 40 }, AppConfig::GetText("back"))) {
+            currentMenuState = MAIN;
+        }
+    }
 }
-
 void MainMenuScene::DrawGUI() {
-    float cx = game->GetWidth() / 2.0f - 100;
-    float cy = game->GetHeight() / 2.0f;
-
-    if (GuiTextBox(Rectangle{ cx, cy, 200, 30 }, ipBuffer, 64, ipEditMode)) {
-        ipEditMode = !ipEditMode;
-    }
-
-    if (GuiButton(Rectangle{ cx, cy + 40, 200, 30 }, "CONNECT")) {
-        game->network.Connect(ipBuffer, 7777);
-        game->ChangeScene(std::make_shared<GameplayScene>(game));
-    }
-
-    if (GuiButton(Rectangle{ cx, cy + 80, 200, 30 }, "HOST LAN GAME")) {
-        game->StartHost();
-        game->network.Connect("127.0.0.1", 7777);
-        game->ChangeScene(std::make_shared<GameplayScene>(game));
-    }
-
-    if (GuiButton(Rectangle{ cx, cy + 130, 200, 30 }, "QUIT")) {
-        CloseWindow();
-    }
 }
 // client\scenes\MainMenuScene.h
 ﻿#pragma once
 #include "../../engine/Scenes/Scene.h"
-#include "../../client/GameClient.h"
 
+class GameClient;
 class MainMenuScene : public Scene {
     char ipBuffer[64] = "127.0.0.1";
     bool ipEditMode = false;
-
 public:
     MainMenuScene(GameClient* g);
     virtual ~MainMenuScene() = default;
@@ -632,6 +1004,52 @@ public:
     void Update(float dt) override {}
     void Draw() override;
     void DrawGUI() override;
+};
+// client\scenes\SettingsScene.h
+﻿#pragma once
+#include "../../engine/Scenes/Scene.h"
+#include "../../client/GameClient.h"
+#include "../Theme.h"
+
+class SettingsScene : public Scene {
+public:
+    SettingsScene(GameClient* g) : Scene(g) {}
+
+    void Enter() override {}
+    void Exit() override {}
+    void Update(float dt) override {} // Логика в DrawGUI
+
+    void Draw() override {
+        ClearBackground(Theme::BG_COLOR);
+        ResourceManager::DrawTextCentered("SETTINGS", game->GetWidth() / 2, 100, 60, Theme::COLOR_BLUE);
+    }
+
+    void DrawGUI() override {
+        float cx = game->GetWidth() / 2.0f - 150;
+        float cy = 200;
+
+        // Управление громкостью
+        GuiLabel(Rectangle{ cx, cy - 30, 300, 20 }, "Master Volume");
+        float vol = game->audio.GetVolume();
+        if (GuiSlider(Rectangle{ cx, cy, 300, 30 }, "0", "1", &vol, 0.0f, 1.0f)) {
+            game->audio.SetVolume(vol);
+        }
+        cy += 80;
+
+        // Полноэкранный режим (для ПК)
+        static bool fullscreen = IsWindowFullscreen();
+        if (GuiCheckBox(Rectangle{ cx, cy, 30, 30 }, "Fullscreen", &fullscreen)) {
+            ToggleFullscreen();
+        }
+        cy += 80;
+
+        // Кнопка назад
+        if (GuiButton(Rectangle{ cx, game->GetHeight() - 100.0f, 300, 50 }, "BACK")) {
+            // Возвращаемся в главное меню (нужен forward declaration или include)
+            // Для простоты в GameClient сделаем метод ReturnToMenu
+            game->ReturnToMenu();
+        }
+    }
 };
 // common\CMakeLists.txt
 ﻿add_library(GameCommon SHARED
@@ -704,7 +1122,8 @@ struct EventPacket : PacketHeader {
 // engine\CMakeLists.txt
 ﻿#Engine module CMakeLists.txt
 add_library(GameEngine SHARED
-    
+    Utils/ConfigManager.h
+    Utils/ConfigManager.cpp
     ECS/GameObject.h
     ECS/Player.h
     ECS/Bullet.h
@@ -712,13 +1131,12 @@ add_library(GameEngine SHARED
     ServerHost.h
  "ServerHost.h"
  ServerHost.cpp
-)
+ "Utils/ConfigManager.h")
 
-target_compile_definitions(GameEngine PRIVATE PHYSAC_NO_THREADS)
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 
-target_link_libraries(GameEngine PUBLIC chipmunk_static GameCommon enet::enet_shared raylib)
+target_link_libraries(GameEngine PUBLIC chipmunk_static GameCommon enet::enet_shared raylib nlohmann_json)
 target_include_directories(GameEngine PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(ANDROID)
@@ -1239,6 +1657,210 @@ public:
     virtual void Exit() = 0;
     virtual void OnPacketReceived(const uint8_t* data, size_t size) {};
 };
+// engine\Utils\ConfigManager.cpp
+﻿#include "ConfigManager.h"
+
+GameConfig ConfigManager::config;
+std::string ConfigManager::configPath;
+Font ConfigManager::mainFont = { 0 };
+
+void ConfigManager::Initialize(const std::string& savePath) {
+    if (!std::filesystem::exists(savePath)) {
+        try {
+            std::filesystem::create_directories(savePath);
+        }
+        catch (const std::exception& e) {
+            std::cerr << "Error creating directory: " << e.what() << std::endl;
+        }
+    }
+
+    configPath = savePath + "config.json";
+
+    Load();
+    LoadFonts();
+}
+
+void ConfigManager::CreateDefaultConfig() {
+    std::cout << "Config file not found. Creating default configuration..." << std::endl;
+
+    config.client.playerName = "Rookie";
+    config.client.lastIp = "127.0.0.1";
+    config.client.language = "ru";
+    config.client.masterVolume = 1.0f;
+    config.client.musicVolume = 0.6f;
+    config.client.fullscreen = false;
+    config.client.targetFPS = 60;
+
+    config.server.port = 7777;
+    config.server.maxPlayers = 4;
+    config.server.tickRate = 60;
+    config.server.serverName = "My Void Server";
+    config.server.password = "";
+
+
+    Save();
+}
+
+void ConfigManager::Save() {
+    json j;
+
+
+    j["client"] = {
+        {"playerName", config.client.playerName},
+        {"lastIp", config.client.lastIp},
+        {"language", config.client.language},
+        {"masterVolume", config.client.masterVolume},
+        {"musicVolume", config.client.musicVolume},
+        {"sfxVolume", config.client.sfxVolume},
+        {"fullscreen", config.client.fullscreen},
+        {"targetFPS", config.client.targetFPS}
+    };
+
+
+    j["server"] = {
+        {"port", config.server.port},
+        {"maxPlayers", config.server.maxPlayers},
+        {"tickRate", config.server.tickRate},
+        {"serverName", config.server.serverName},
+        {"password", config.server.password}
+    };
+
+    std::ofstream file(configPath);
+    if (file.is_open()) {
+        file << j.dump(4);
+        file.close();
+        std::cout << "Config saved to: " << configPath << std::endl;
+    }
+    else {
+        std::cerr << "Failed to save config to: " << configPath << std::endl;
+    }
+}
+
+void ConfigManager::Load() {
+    if (!std::filesystem::exists(configPath)) {
+        CreateDefaultConfig();
+        return;
+    }
+
+    std::ifstream file(configPath);
+    if (file.is_open()) {
+        try {
+            json j = json::parse(file);
+
+            if (j.contains("client")) {
+                auto& c = j["client"];
+                config.client.playerName = c.value("playerName", "Player");
+                config.client.lastIp = c.value("lastIp", "127.0.0.1");
+                config.client.language = c.value("language", "ru");
+                config.client.masterVolume = c.value("masterVolume", 1.0f);
+                config.client.musicVolume = c.value("musicVolume", 0.7f);
+                config.client.sfxVolume = c.value("sfxVolume", 0.8f);
+                config.client.fullscreen = c.value("fullscreen", false);
+                config.client.targetFPS = c.value("targetFPS", 60);
+            }
+
+            if (j.contains("server")) {
+                auto& s = j["server"];
+                config.server.port = s.value("port", 7777);
+                config.server.maxPlayers = s.value("maxPlayers", 8);
+                config.server.tickRate = s.value("tickRate", 60);
+                config.server.serverName = s.value("serverName", "Void Server");
+                config.server.password = s.value("password", "");
+            }
+
+            std::cout << "Config loaded successfully." << std::endl;
+
+        }
+        catch (const json::parse_error& e) {
+            std::cerr << "JSON Parse Error: " << e.what() << ". Recreating defaults." << std::endl;
+            file.close();
+            CreateDefaultConfig();
+        }
+    }
+}
+
+void ConfigManager::LoadFonts() {
+
+    int codepoints[512] = { 0 };
+    for (int i = 0; i < 95; i++) codepoints[i] = 32 + i;
+    for (int i = 0; i < 255; i++) codepoints[96 + i] = 0x400 + i;
+
+
+    const char* fontPath = "assets/fonts/Roboto-Regular.ttf";
+
+    if (FileExists(fontPath)) {
+        mainFont = LoadFontEx(fontPath, 32, codepoints, 512);
+        GuiSetFont(mainFont);
+    }
+    else {
+        std::cerr << "WARNING: Font not found at " << fontPath << ". Using default font." << std::endl;
+        mainFont = GetFontDefault();
+    }
+}
+
+void ConfigManager::UnloadResources() {
+    if (mainFont.texture.id != 0) {
+        UnloadFont(mainFont);
+    }
+}
+// engine\Utils\ConfigManager.h
+﻿#pragma once
+#include <string>
+#include <fstream>
+#include <filesystem>
+#include <iostream>
+#include "raylib.h"
+#include "nlohmann/json.hpp"
+
+using json = nlohmann::json;
+
+struct ClientConfig {
+    std::string playerName = "Player";
+    std::string lastIp = "127.0.0.1";
+    std::string language = "ru";
+    float masterVolume = 1.0f;
+    float musicVolume = 0.7f;
+    float sfxVolume = 0.8f;
+    bool fullscreen = false;
+    int targetFPS = 60;
+};
+
+struct ServerConfig {
+    int port = 7777;
+    int maxPlayers = 8;
+    int tickRate = 60;
+    std::string serverName = "Void Assault Server";
+    std::string password = "";
+};
+
+struct GameConfig {
+    ClientConfig client;
+    ServerConfig server;
+};
+
+class ConfigManager {
+private:
+    static GameConfig config;
+    static std::string configPath;
+    static Font mainFont;
+
+    static void CreateDefaultConfig();
+
+public:
+    static void Initialize(const std::string& savePath);
+
+    static void Save();
+    static void Load();
+
+
+    static ClientConfig& GetClient() { return config.client; }
+    static ServerConfig& GetServer() { return config.server; }
+
+    static void LoadFonts();
+    static Font GetFont() { return mainFont; }
+    static void UnloadResources();
+};
+
 // server\CMakeLists.txt
 ﻿#server module CMakeLists.txt
 add_executable(GameServer

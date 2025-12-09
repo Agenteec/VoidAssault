@@ -50,7 +50,7 @@ set(FIX_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/fix")
 set(ENET_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/enet/include")
 set(CHIPMUNK2D_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/Chipmunk2D/include")
 
-
+set(PROJECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_subdirectory(src/engine)
 add_subdirectory(src/server)
 add_subdirectory(src/client)

@@ -1,0 +1,39 @@
+﻿{
+  "title_void_assault": "VOID ASSAULT",
+
+  "lbl_player_setup": "Player Setup",
+  "lbl_nickname": "Nickname:",
+  "lbl_connection": "Connection Settings",
+  "lbl_server_setup": "Server Settings",
+
+  "tabs_multiplayer": "Join Game;Host Server",
+
+  "btn_join": "CONNECT",
+  "btn_create_lobby": "CREATE LOBBY",
+  "btn_settings": "SETTINGS",
+  "btn_singleplayer": "SINGLEPLAYER",
+  "btn_multiplayer": "MULTIPLAYER",
+  "btn_exit": "EXIT",
+  "btn_back": "BACK",
+  "btn_save": "SAVE",
+
+  "lbl_ip": "IP Address:",
+  "lbl_port": "Port:",
+
+  "header_audio": "Audio",
+  "header_graphics": "Graphics",
+  "lbl_master_vol": "Master Volume:",
+  "lbl_music_vol": "Music Volume:",
+  "lbl_sfx_vol": "SFX Volume:",
+  "lbl_fullscreen": "Fullscreen:",
+  "lbl_language": "Language:",
+
+  "game_wave": "Wave:",
+  "game_score": "Score:",
+  "game_resources": "Resources:",
+  "game_reactor": "Reactor Integrity:",
+
+  "msg_connecting": "Connecting...",
+  "msg_failed": "Connection Failed",
+  "msg_waiting": "Waiting for host..."
+}

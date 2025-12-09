@@ -1,12 +1,25 @@
 ﻿#include "GameplayScene.h"
-#include "MainMenuScene.h" // Теперь это безопасно
-
+#include "MainMenuScene.h"
+#include "../GameClient.h"
 GameplayScene::GameplayScene(GameClient* g) : Scene(g) {}
 
 void GameplayScene::Enter() {
+    float w = (float)game->GetWidth();
+    float h = (float)game->GetHeight();
+
     camera.zoom = 1.0f;
-    camera.offset = { (float)game->GetWidth() / 2, (float)game->GetHeight() / 2 };
+    camera.offset = { w / 2, h / 2 };
+
+    // Инициализация джойстиков
+    // Слева - Движение
+    leftStick = std::make_unique<VirtualJoystick>(Vector2{ 150, h - 150 }, 40.0f, 90.0f);
+
+    // Справа - Стрельба (Красный)
+    rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - 150, h - 150 }, 40.0f, 90.0f);
+    rightStick->SetColors({ 60, 0, 0, 150 }, { 220, 50, 50, 200 });
 }
+
+
 
 void GameplayScene::Exit() {
     game->network.Disconnect();
@@ -40,17 +53,48 @@ void GameplayScene::OnPacketReceived(const uint8_t* data, size_t size) {
 }
 
 void GameplayScene::Update(float dt) {
+    // 1. Обновляем джойстики
+    leftStick->Update();
+    rightStick->Update();
+
     PlayerInputPacket pkt;
     pkt.type = PacketType::client_INPUT;
-    pkt.movement = { 0, 0 };
+
+    // 2. Логика движения
+    Vector2 moveDir = leftStick->GetAxis();
+    pkt.movement = moveDir;
+
+    // Поддержка клавиатуры (WASD)
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
     if (IsKeyDown(KEY_D)) pkt.movement.x += 1.0f;
 
-    pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
-    pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+    // Нормализация
+    if (Vector2Length(pkt.movement) > 1.0f) {
+        pkt.movement = Vector2Normalize(pkt.movement);
+    }
 
+    // 3. Логика стрельбы
+    Vector2 aimDir = rightStick->GetAxis();
+
+    // Если джойстик отклонен
+    if (Vector2Length(aimDir) > 0.2f) { // Deadzone
+        pkt.isShooting = true;
+
+        if (worldEntities.count(myPlayerId)) {
+            // Стреляем относительно игрока
+            Vector2 playerPos = worldEntities[myPlayerId].renderPos;
+            pkt.aimTarget = Vector2Add(playerPos, Vector2Scale(aimDir, 300.0f));
+        }
+    }
+    // Если джойстик не трогают - управление мышью
+    else {
+        pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
+        pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+    }
+
+    // 4. Отправка и обновление
     game->network.SendInput(pkt);
 
     for (auto& [id, ent] : worldEntities) {
@@ -95,8 +139,8 @@ void GameplayScene::DrawGUI() {
     if (!game->network.isConnected) {
         DrawText("Connecting to server...", game->GetWidth() / 2 - 100, 20, 20, RED);
     }
-
-    // Здесь конфликтов больше быть не должно, так как raygui_wrapper подчистил макросы
+    leftStick->Draw();
+    rightStick->Draw();
     if (GuiButton(Rectangle{ (float)game->GetWidth() - 100, 10, 90, 30 }, "DISCONNECT")) {
         game->ChangeScene(std::make_shared<MainMenuScene>(game));
     }
