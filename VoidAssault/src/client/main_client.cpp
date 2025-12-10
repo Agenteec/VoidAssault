@@ -46,6 +46,7 @@ Font LoadFont() {
 	return mainFont;
 }
 int main() {
+    GameClient game;
     std::string configPath = "./";
 
 #if defined(ANDROID) || defined(PLATFORM_ANDROID)
@@ -55,8 +56,9 @@ int main() {
 
     ConfigManager::Initialize(configPath);
 
-    GameClient game;
-    LoadFont();
+
+    auto f = LoadFont();
+    ConfigManager::SetFont(f);
     GuiSetFont(ConfigManager::GetFont());
 
     SetTargetFPS(ConfigManager::GetClient().targetFPS);
