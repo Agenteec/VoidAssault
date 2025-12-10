@@ -46,7 +46,14 @@ Font LoadFont() {
 	return mainFont;
 }
 int main() {
-    ConfigManager::Initialize("./");
+    std::string configPath = "./";
+
+#if defined(ANDROID) || defined(PLATFORM_ANDROID)
+
+    configPath = GetApplicationDirectory();
+#endif
+
+    ConfigManager::Initialize(configPath);
 
     GameClient game;
     LoadFont();

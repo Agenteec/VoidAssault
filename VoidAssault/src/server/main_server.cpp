@@ -7,7 +7,14 @@ int main() {
         std::cerr << "An error occurred while initializing ENet.\n";
         return 1;
     }
-
+//    std::string configPath = "./";
+//
+//#if defined(ANDROID) || defined(PLATFORM_ANDROID)
+//
+//    configPath = GetApplicationDirectory();
+//#endif
+//
+//    ConfigManager::Initialize(configPath);
     InitWindow(100, 100, "ServerHeadless");
     SetWindowState(FLAG_WINDOW_HIDDEN);
 

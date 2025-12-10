@@ -14,15 +14,14 @@ void ConfigManager::Initialize(const std::string& savePath) {
     configPath = savePath + "config.json";
     Load();
     LoadFonts();
-    LoadLanguage(config.client.language); // Загружаем язык при старте
+    LoadLanguage(config.client.language);
 }
 
 void ConfigManager::CreateDefaultConfig() {
     std::cout << "Creating default config..." << std::endl;
-    // ... (старая инициализация значений) ...
     config.client.playerName = "Rookie";
     config.client.lastIp = "127.0.0.1";
-    config.client.language = "ru"; // Дефолтный язык
+    config.client.language = "ru";
     config.server.port = 7777;
     Save();
 }
@@ -32,7 +31,7 @@ void ConfigManager::Save() {
     j["client"] = {
         {"playerName", config.client.playerName},
         {"lastIp", config.client.lastIp},
-        {"language", config.client.language}, // Сохраняем язык
+        {"language", config.client.language},
         {"masterVolume", config.client.masterVolume},
         {"musicVolume", config.client.musicVolume},
         {"fullscreen", config.client.fullscreen},
