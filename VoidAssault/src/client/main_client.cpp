@@ -32,10 +32,10 @@ Font LoadFont() {
     int* completeCodepoints = GetCompleteCodepoints(&codepointCount);
 	Font mainFont;
 #ifdef ANDROID
-    mainFont = LoadFontEx("assets/fonts//Roboto-Regular.ttf", 70, completeCodepoints, codepointCount);
+    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 70, completeCodepoints, codepointCount);
     GuiSetStyle(DEFAULT, TEXT_SIZE, 58);
 #else
-    mainFont = LoadFontEx("assets/fonts//Roboto-Regular.ttf", 36, completeCodepoints, codepointCount);
+    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 36, completeCodepoints, codepointCount);
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 
 #endif // ANDROID
@@ -59,7 +59,7 @@ int main() {
 
     auto f = LoadFont();
     ConfigManager::SetFont(f);
-    GuiSetFont(ConfigManager::GetFont());
+    GuiSetFont(f);
 
     SetTargetFPS(ConfigManager::GetClient().targetFPS);
     if (ConfigManager::GetClient().fullscreen) {
