@@ -44,14 +44,15 @@ void GameClient::StartHost() {
     }
 }
 void GameClient::StartHost(int port) {
-    if (!localServer) {
-        localServer = std::make_unique<ServerHost>();
-        if (localServer->Start(port)) {
-            TraceLog(LOG_INFO, "Local Server Started!");
-        }
-        else {
-            TraceLog(LOG_ERROR, "Failed to start local server!");
-        }
+    StopHost();
+
+    localServer = std::make_unique<ServerHost>();
+    if (localServer->Start(port)) {
+        TraceLog(LOG_INFO, "Local Server Started on port %d", port);
+    }
+    else {
+        TraceLog(LOG_ERROR, "Failed to start local server on port %d!", port);
+        localServer.reset();
     }
 }
 void GameClient::StopHost() {

@@ -15,6 +15,12 @@ class ServerHost {
     std::atomic<bool> running;
     std::thread serverThread;
 
+    ENetHost* gameServerHost = nullptr;
+
+    ENetHost* masterClientHost = nullptr;
+    ENetPeer* masterPeer = nullptr;
+    double lastHeartbeatTime = 0;
+
 public:
     ServerHost();
     ~ServerHost();
@@ -23,4 +29,7 @@ public:
     void Stop();
 
     void ServerLoop();
+
+    void ConnectToMaster();
+    void SendHeartbeat();
 };

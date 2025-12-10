@@ -28,14 +28,24 @@ void ConfigManager::CreateDefaultConfig() {
 
 void ConfigManager::Save() {
     json j;
+
+    // Сериализация избранного
+    json jFav = json::array();
+    for (const auto& s : config.client.favoriteServers) {
+        jFav.push_back({ {"name", s.name}, {"ip", s.ip}, {"port", s.port} });
+    }
+
     j["client"] = {
         {"playerName", config.client.playerName},
         {"lastIp", config.client.lastIp},
         {"language", config.client.language},
+        {"masterServerIp", config.client.masterServerIp},   // Save
+        {"masterServerPort", config.client.masterServerPort}, // Save
         {"masterVolume", config.client.masterVolume},
         {"musicVolume", config.client.musicVolume},
         {"fullscreen", config.client.fullscreen},
-        {"targetFPS", config.client.targetFPS}
+        {"targetFPS", config.client.targetFPS},
+        {"favorites", jFav} // Save Favorites
     };
     j["server"] = {
         {"port", config.server.port},
@@ -57,8 +67,22 @@ void ConfigManager::Load() {
                 config.client.playerName = c.value("playerName", "Player");
                 config.client.lastIp = c.value("lastIp", "127.0.0.1");
                 config.client.language = c.value("language", "ru");
+                config.client.masterServerIp = c.value("masterServerIp", "127.0.0.1");
+                config.client.masterServerPort = c.value("masterServerPort", 7777);
                 config.client.targetFPS = c.value("targetFPS", 60);
                 config.client.fullscreen = c.value("fullscreen", false);
+
+                // Загрузка избранного
+                config.client.favoriteServers.clear();
+                if (c.contains("favorites")) {
+                    for (auto& elem : c["favorites"]) {
+                        SavedServer s;
+                        s.name = elem.value("name", "Server");
+                        s.ip = elem.value("ip", "127.0.0.1");
+                        s.port = elem.value("port", 7777);
+                        config.client.favoriteServers.push_back(s);
+                    }
+                }
             }
             if (j.contains("server")) {
                 auto& s = j["server"];
@@ -80,7 +104,6 @@ void ConfigManager::LoadFonts() {
         mainFont = LoadFontEx(fontPath, 60, codepoints, 512);
 #else
         mainFont = LoadFontEx(fontPath, 32, codepoints, 512);
-
 #endif // ANDROID
     }
     else {

@@ -190,14 +190,15 @@ void GameClient::StartHost() {
     }
 }
 void GameClient::StartHost(int port) {
-    if (!localServer) {
-        localServer = std::make_unique<ServerHost>();
-        if (localServer->Start(port)) {
-            TraceLog(LOG_INFO, "Local Server Started!");
-        }
-        else {
-            TraceLog(LOG_ERROR, "Failed to start local server!");
-        }
+    StopHost();
+
+    localServer = std::make_unique<ServerHost>();
+    if (localServer->Start(port)) {
+        TraceLog(LOG_INFO, "Local Server Started on port %d", port);
+    }
+    else {
+        TraceLog(LOG_ERROR, "Failed to start local server on port %d!", port);
+        localServer.reset();
     }
 }
 void GameClient::StopHost() {
@@ -325,10 +326,10 @@ Font LoadFont() {
     int* completeCodepoints = GetCompleteCodepoints(&codepointCount);
 	Font mainFont;
 #ifdef ANDROID
-    mainFont = LoadFontEx("assets/fonts//Roboto-Regular.ttf", 70, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 58);
+    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 #else
-    mainFont = LoadFontEx("assets/fonts//Roboto-Regular.ttf", 36, completeCodepoints, codepointCount);
+    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 
 #endif // ANDROID
@@ -339,6 +340,7 @@ Font LoadFont() {
 	return mainFont;
 }
 int main() {
+    GameClient game;
     std::string configPath = "./";
 
 #if defined(ANDROID) || defined(PLATFORM_ANDROID)
@@ -348,9 +350,10 @@ int main() {
 
     ConfigManager::Initialize(configPath);
 
-    GameClient game;
-    LoadFont();
-    GuiSetFont(ConfigManager::GetFont());
+
+    auto f = LoadFont();
+    ConfigManager::SetFont(f);
+    GuiSetFont(f);
 
     SetTargetFPS(ConfigManager::GetClient().targetFPS);
     if (ConfigManager::GetClient().fullscreen) {
@@ -372,13 +375,24 @@ public:
     ENetHost* clientHost = nullptr;
     ENetPeer* serverPeer = nullptr;
     bool isConnected = false;
-
+    std::vector<LobbyInfo> lobbyList;
+    bool isWaitingForList = false;
     bool Init() {
         if (enet_initialize() != 0) return false;
         clientHost = enet_host_create(NULL, 1, 2, 0, 0);
         return (clientHost != nullptr);
     }
+    void RequestServerList() {
 
+        if (!Init()) return;
+
+
+        std::string ip = ConfigManager::GetClient().masterServerIp;
+        int port = ConfigManager::GetClient().masterServerPort;
+
+        Connect(ip, port);
+        isWaitingForList = true;
+    }
     void Connect(const std::string& ip, int port) {
         ENetAddress address;
         enet_address_set_host(&address, ip.c_str());
@@ -394,7 +408,46 @@ public:
         }
         isConnected = false;
     }
+    void Update() {
+        if (!clientHost) return;
 
+        ENetEvent event;
+        while (enet_host_service(clientHost, &event, 0) > 0) {
+            switch (event.type) {
+            case ENET_EVENT_TYPE_CONNECT:
+                if (isWaitingForList) {
+                    // Как только подключились к мастеру - просим список
+                    MasterListRequestPacket req;
+                    req.type = PacketType::master_LIST_REQ;
+                    ENetPacket* p = enet_packet_create(&req, sizeof(req), ENET_PACKET_FLAG_RELIABLE);
+                    enet_peer_send(serverPeer, 0, p);
+                }
+                // Иначе это подключение к игровому серверу -> GameClient обработает
+                break;
+
+            case ENET_EVENT_TYPE_RECEIVE:
+                if (isWaitingForList) {
+                    PacketHeader* h = (PacketHeader*)event.packet->data;
+                    if (h->type == PacketType::master_LIST_RES) {
+                        MasterListResponsePacket* res = (MasterListResponsePacket*)event.packet->data;
+                        lobbyList.clear();
+
+                        LobbyInfo* infos = (LobbyInfo*)(event.packet->data + sizeof(MasterListResponsePacket));
+                        for (int i = 0; i < res->count; i++) {
+                            lobbyList.push_back(infos[i]);
+                        }
+
+                        // Получили список -> отключаемся от мастера
+                        Disconnect();
+                        isWaitingForList = false;
+                    }
+                    enet_packet_destroy(event.packet);
+                }
+                // Иначе передаем пакет выше (в GameScene) через callback или очередь
+                break;
+            }
+        }
+    }
     void SendInput(const PlayerInputPacket& input) {
         if (!isConnected || !serverPeer) return;
         ENetPacket* packet = enet_packet_create(&input, sizeof(PlayerInputPacket), ENET_PACKET_FLAG_UNSEQUENCED);
@@ -917,21 +970,24 @@ public:
 #include "raygui.h"
 #include "GameClient.h"
 #include "engine/Utils/ConfigManager.h"
-#include <cstring> // для strcpy
+#include <cstring>
 
 enum MenuState { MAIN, MULTIPLAYER, SETTINGS };
 static MenuState currentMenuState = MAIN;
-
+static int mpTab = 0; // 0=Internet, 1=LAN, 2=Direct/Favorites
+static int selectedServerIndex = -1;
+static std::string statusMessage = "";
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
 
 void MainMenuScene::Enter() {
-    // Копируем данные из конфига в буферы при входе
     ClientConfig& cfg = ConfigManager::GetClient();
     ServerConfig& sCfg = ConfigManager::GetServer();
 
     strcpy(ipBuffer, cfg.lastIp.c_str());
     sprintf(portBuffer, "%d", cfg.lastPort > 0 ? cfg.lastPort : sCfg.port);
     strcpy(nameBuffer, cfg.playerName.c_str());
+    statusMessage = "";
+    selectedServerIndex = -1;
 }
 
 void MainMenuScene::Draw() {
@@ -940,86 +996,209 @@ void MainMenuScene::Draw() {
     int h = GetScreenHeight();
 
     const char* title = ConfigManager::Text("title_void_assault");
-    DrawText(title, w / 2 - MeasureText(title, 60) / 2, 50, 60, WHITE);
+    DrawText(title, w / 2 - MeasureText(title, 60) / 2, 40, 60, WHITE);
 
     if (currentMenuState == MAIN) {
-        float btnW = 300; float btnH = 50; float startY = 200; float spacing = 70;
+        float btnW = 300; float btnH = 50; float startY = 180; float spacing = 65;
 
-        // Одиночная игра (Хост + Клиент)
+
         if (GuiButton({ (float)w / 2 - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
             game->StartHost(7777);
-            // После старта хоста подключаемся к самому себе
-            game->network.Connect("127.0.0.1", 7777);
-            // Сцена сменится при получении пакета коннекта или вручную тут
+            if (game->localServer) {
+                game->network.Connect("127.0.0.1", 7777);
+            }
+            else {
+                statusMessage = "Error: Port 7777 is busy!";
+            }
         }
 
-        // Сетевая игра
+        // --- MULTIPLAYER ---
         if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
             currentMenuState = MULTIPLAYER;
         }
 
-        // Настройки
+        // --- SETTINGS ---
         if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
             currentMenuState = SETTINGS;
         }
 
-        // Выход
+        // --- EXIT ---
         if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
             CloseWindow();
         }
+
+        if (!statusMessage.empty()) {
+            DrawText(statusMessage.c_str(), w / 2 - MeasureText(statusMessage.c_str(), 20) / 2, h - 50, 20, RED);
+        }
     }
     else if (currentMenuState == MULTIPLAYER) {
-        // Настройка имени
-        GuiGroupBox({ (float)w / 2 - 200, 130, 400, 60 }, ConfigManager::Text("lbl_player_setup"));
-        GuiLabel({ (float)w / 2 - 180, 150, 100, 30 }, ConfigManager::Text("lbl_nickname"));
-        if (GuiTextBox({ (float)w / 2 - 80, 150, 260, 30 }, nameBuffer, 32, isEditingName)) {
+
+        GuiGroupBox({ (float)w / 2 - 250, 100, 500, 60 }, ConfigManager::Text("lbl_player_setup"));
+        GuiLabel({ (float)w / 2 - 230, 120, 80, 30 }, "Nickname:");
+        if (GuiTextBox({ (float)w / 2 - 150, 120, 300, 30 }, nameBuffer, 32, isEditingName)) {
             isEditingName = !isEditingName;
             ConfigManager::GetClient().playerName = std::string(nameBuffer);
             ConfigManager::Save();
         }
 
-        // Вкладки
-        activeTab = GuiToggleGroup({ (float)w / 2 - 200, 220, 200, 40 }, ConfigManager::Text("tabs_multiplayer"), &activeTab);
 
-        float startY = 280;
+        GuiToggleGroup({ (float)w / 2 - 300, 180, 200, 40 }, "ONLINE;LAN;DIRECT / HOST", &mpTab);
 
-        if (activeTab == 0) { // ПОДКЛЮЧЕНИЕ
-            GuiLabel({ (float)w / 2 - 180, startY, 50, 30 }, ConfigManager::Text("lbl_ip"));
-            if (GuiTextBox({ (float)w / 2 - 130, startY, 200, 30 }, ipBuffer, 64, isEditingIp)) isEditingIp = !isEditingIp;
+        float listX = (float)w / 2 - 300;
+        float listY = 240;
+        float listW = 600;
+        float listH = 300;
 
-            GuiLabel({ (float)w / 2 + 80, startY, 50, 30 }, ConfigManager::Text("lbl_port"));
-            if (GuiTextBox({ (float)w / 2 + 120, startY, 80, 30 }, portBuffer, 16, isEditingPort)) isEditingPort = !isEditingPort;
+        GuiGroupBox({ listX, listY, listW, listH }, "Server List");
 
-            if (GuiButton({ (float)w / 2 - 150, startY + 60, 300, 50 }, ConfigManager::Text("btn_join"))) {
-                ClientConfig& cfg = ConfigManager::GetClient();
-                cfg.lastIp = std::string(ipBuffer);
-                cfg.lastPort = atoi(portBuffer);
-                ConfigManager::Save();
+        if (mpTab == 0) {
+            float startY = 280;
 
-                game->network.Connect(cfg.lastIp, cfg.lastPort);
-                // Переход в игру произойдет автоматически при событии ENET_CONNECT в GameClient::Run
+            // Кнопка Refresh
+            if (GuiButton({ (float)w / 2 + 150, startY - 40, 100, 30 }, "REFRESH")) {
+                game->network.RequestServerList();
+            }
+
+            // Статус
+            if (game->network.isWaitingForList) {
+                GuiLabel({ (float)w / 2 - 50, startY, 200, 30 }, "Fetching list...");
+            }
+            else if (game->network.lobbyList.empty()) {
+                GuiLabel({ (float)w / 2 - 80, startY, 200, 30 }, "No servers found.");
+            }
+            else {
+  
+                int yOffset = 0;
+                for (const auto& lobby : game->network.lobbyList) {
+                    std::string text = std::string(lobby.name) + " | Map: " + lobby.mapName +
+                        " | " + std::to_string(lobby.players) + "/" + std::to_string(lobby.maxPlayers);
+
+                    if (GuiButton({ (float)w / 2 - 200, startY + (float)yOffset, 300, 30 }, text.c_str())) {
+   
+                        std::string ip = lobby.ip;
+                        int port = lobby.port;
+
+                        game->network.Connect(ip, port);
+          
+                    }
+                    yOffset += 40;
+                }
             }
         }
-        else if (activeTab == 1) { // СОЗДАНИЕ
-            GuiLabel({ (float)w / 2 - 50, startY, 50, 30 }, ConfigManager::Text("lbl_port"));
-            if (GuiTextBox({ (float)w / 2, startY, 100, 30 }, portBuffer, 16, isEditingPort)) isEditingPort = !isEditingPort;
 
-            if (GuiButton({ (float)w / 2 - 150, startY + 60, 300, 50 }, ConfigManager::Text("btn_create_lobby"))) {
+        else if (mpTab == 1) {
+
+            if (GuiButton({ listX + listW - 120, listY - 40, 100, 30 }, "REFRESH")) {
+                game->network.ScanLAN(7777, 7780);
+            }
+
+            int itemH = 40;
+            auto& servers = game->network.foundServers;
+
+
+            DrawText("Name", listX + 10, listY + 10, 20, GRAY);
+            DrawText("IP:Port", listX + 250, listY + 10, 20, GRAY);
+            DrawText("Ping", listX + 500, listY + 10, 20, GRAY);
+
+
+            BeginScissorMode((int)listX, (int)listY + 30, (int)listW, (int)listH - 40);
+            for (size_t i = 0; i < servers.size(); i++) {
+                Rectangle itemRect = { listX, listY + 35 + i * itemH, listW, (float)itemH };
+
+
+                if (selectedServerIndex == (int)i) {
+                    DrawRectangleRec(itemRect, Fade(SKYBLUE, 0.3f));
+                }
+
+
+                if (CheckCollisionPointRec(GetMousePosition(), itemRect)) {
+                    DrawRectangleRec(itemRect, Fade(LIGHTGRAY, 0.1f));
+                    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+                        selectedServerIndex = (int)i;
+                    }
+                }
+
+                DrawText(servers[i].name.c_str(), itemRect.x + 10, itemRect.y + 10, 20, WHITE);
+                std::string ipStr = servers[i].ip + ":" + std::to_string(servers[i].port);
+                DrawText(ipStr.c_str(), itemRect.x + 250, itemRect.y + 10, 20, LIGHTGRAY);
+                DrawText("?", itemRect.x + 500, itemRect.y + 10, 20, GREEN);
+            }
+            EndScissorMode();
+
+
+            if (selectedServerIndex >= 0 && selectedServerIndex < (int)servers.size()) {
+                if (GuiButton({ listX, listY + listH + 10, listW, 50 }, "JOIN SERVER")) {
+                    auto& s = servers[selectedServerIndex];
+                    game->network.Connect(s.ip, s.port);
+                }
+            }
+        }
+
+        else if (mpTab == 2) {
+            float subY = listY + 20;
+
+ 
+            GuiLabel({ listX + 20, subY, 200, 30 }, "--- CREATE LOBBY ---");
+            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "Port:");
+            if (GuiTextBox({ listX + 70, subY + 40, 80, 30 }, portBuffer, 6, isEditingPort)) isEditingPort = !isEditingPort;
+
+            if (GuiButton({ listX + 170, subY + 40, 150, 30 }, "HOST SERVER")) {
                 int port = atoi(portBuffer);
                 ConfigManager::GetServer().port = port;
                 ConfigManager::Save();
-
                 game->StartHost(port);
-                game->network.Connect("127.0.0.1", port);
+                if (game->localServer) {
+                    game->network.Connect("127.0.0.1", port);
+                }
+                else {
+                    statusMessage = "Failed to bind port (Already in use?)";
+                }
+            }
+
+            subY += 100;
+            DrawLine((int)listX, (int)subY, (int)(listX + listW), (int)subY, GRAY);
+            subY += 20;
+
+            GuiLabel({ listX + 20, subY, 200, 30 }, "--- DIRECT CONNECT ---");
+            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "IP:");
+            if (GuiTextBox({ listX + 70, subY + 40, 200, 30 }, ipBuffer, 64, isEditingIp)) isEditingIp = !isEditingIp;
+
+            if (GuiButton({ listX + 280, subY + 40, 120, 30 }, "ADD FAVORITE")) {
+                SavedServer sv;
+                sv.ip = ipBuffer;
+                sv.port = atoi(portBuffer);
+                sv.name = "Custom Server";
+                ConfigManager::GetClient().favoriteServers.push_back(sv);
+                ConfigManager::Save();
+            }
+
+            if (GuiButton({ listX + 410, subY + 40, 150, 30 }, "CONNECT")) {
+                int port = atoi(portBuffer);
+                game->network.Connect(ipBuffer, port);
+            }
+
+            subY += 80;
+            GuiLabel({ listX + 20, subY, 200, 20 }, "Favorites:");
+            auto& favs = ConfigManager::GetClient().favoriteServers;
+            for (int i = 0; i < favs.size() && i < 3; i++) {
+                std::string label = favs[i].ip + ":" + std::to_string(favs[i].port);
+                if (GuiButton({ listX + 20, subY + 25 + (i * 35.0f), 300, 30 }, label.c_str())) {
+                    strcpy(ipBuffer, favs[i].ip.c_str());
+                    sprintf(portBuffer, "%d", favs[i].port);
+                    game->network.Connect(favs[i].ip, favs[i].port);
+                }
             }
         }
-
         if (GuiButton({ 20, 20, 100, 40 }, ConfigManager::Text("btn_back"))) {
             currentMenuState = MAIN;
+            statusMessage = "";
+        }
+
+        if (!statusMessage.empty()) {
+            DrawText(statusMessage.c_str(), listX, listY + listH + 70, 20, RED);
         }
     }
     else if (currentMenuState == SETTINGS) {
-        // Смена языка
         if (GuiButton({ (float)w / 2 - 100, 200, 200, 40 }, "Language: RU / EN")) {
             ClientConfig& cfg = ConfigManager::GetClient();
             cfg.language = (cfg.language == "ru") ? "en" : "ru";
@@ -1127,9 +1306,19 @@ target_include_directories(GameCommon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 enum class PacketType : uint8_t {
     client_CONNECT,
     client_INPUT,
+    client_PING,
+    client_DISCOVERY_REQ,
+
     server_INIT,
     server_SNAPSHOT,
-    server_EVENT
+    server_EVENT,
+
+    master_REGISTER,   
+    master_HEARTBEAT,  
+    master_LIST_REQ,   
+    master_LIST_RES
+
+
 };
 
 struct PacketHeader {
@@ -1174,6 +1363,39 @@ struct EventPacket : PacketHeader {
     GameEvent eventId;
     Vector2 position;
 };
+
+struct LobbyInfoPacket : PacketHeader {
+    char serverName[32];
+    char mapName[32];
+    uint8_t currentPlayers;
+    uint8_t maxPlayers;
+    uint16_t port;
+};
+struct PingPacket : PacketHeader {
+    double timestamp;
+};
+
+struct LobbyInfo {
+    uint32_t id;       
+    char name[32];     
+    char ip[16];       
+    uint16_t port;     
+    uint8_t players;   
+    uint8_t maxPlayers;
+    char mapName[32];  
+};
+
+struct MasterRegisterPacket : PacketHeader {
+    uint16_t gamePort;  
+    char serverName[32];
+    char mapName[32];
+    uint8_t maxPlayers;
+};
+
+struct MasterHeartbeatPacket : PacketHeader {
+    uint8_t currentPlayers;
+};
+
 // engine\CMakeLists.txt
 ﻿#Engine module CMakeLists.txt
 add_library(GameEngine SHARED
@@ -1245,11 +1467,23 @@ bool ServerHost::Start(int port) {
     }
 
     running = true;
-    // Запускаем цикл в отдельном потоке
     serverThread = std::thread(&ServerHost::ServerLoop, this);
+    ConnectToMaster();
     return true;
 }
+void ServerHost::ConnectToMaster() {
+    masterClientHost = enet_host_create(NULL, 1, 2, 0, 0);
+    if (!masterClientHost) return;
 
+    ENetAddress addr;
+    std::string ip = ConfigManager::GetClient().masterServerIp;
+    int port = ConfigManager::GetClient().masterServerPort;
+
+    enet_address_set_host(&addr, ip.c_str());
+    addr.port = port;
+
+    masterPeer = enet_host_connect(masterClientHost, &addr, 2, 0);
+}
 void ServerHost::Stop() {
     running = false;
     if (serverThread.joinable()) {
@@ -1261,8 +1495,9 @@ void ServerHost::Stop() {
     }
 }
 
+
 void ServerHost::ServerLoop() {
-    std::cout << "Server started loop.\n";
+    std::cout << "Server started loop on port " << server->address.port << ".\n";
     const double dt = 1.0 / 60.0;
     double accumulator = 0.0;
     double lastTime = GetTime();
@@ -1274,66 +1509,94 @@ void ServerHost::ServerLoop() {
         accumulator += frameTime;
 
         ENetEvent event;
-        while (enet_host_service(server, &event, 0) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT: {
-                std::cout << "A new client connected from...\n";// << event.peer->address.host.u.Word << ":" << event.peer->address.port << ".\n";
+        if (masterClientHost) {
 
-                auto player = gameScene.CreatePlayer();
+            while (enet_host_service(server, &event, 0) > 0) {
+                switch (event.type) {
+                case ENET_EVENT_TYPE_CONNECT: {
+                    std::cout << "Connected to Master Server!\n";
 
-                event.peer->data = (void*)(uintptr_t)player->id;
+                    // Сразу отправляем регистрацию
+                    MasterRegisterPacket reg;
+                    reg.type = PacketType::master_REGISTER;
+                    reg.gamePort = server->address.port; // Порт на котором играем
+                    reg.maxPlayers = 8;
+                    strncpy(reg.serverName, ConfigManager::GetServer().serverName.c_str(), 31);
+                    strncpy(reg.mapName, "Map 1", 31);
 
-                InitPacket initPkt;
-                initPkt.type = PacketType::server_INIT;
-                initPkt.yourPlayerId = player->id;
+                    ENetPacket* p = enet_packet_create(&reg, sizeof(reg), ENET_PACKET_FLAG_RELIABLE);
+                    enet_peer_send(masterPeer, 0, p);
+                    break;
+                }
+                case ENET_EVENT_TYPE_RECEIVE: {
+                    if (event.packet->dataLength < sizeof(PacketHeader)) break;
 
-                ENetPacket* packet = enet_packet_create(&initPkt, sizeof(InitPacket), ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(event.peer, 0, packet);
-                break;
-            }
-            case ENET_EVENT_TYPE_RECEIVE: {
-                PacketHeader* header = (PacketHeader*)event.packet->data;
-                if (header->type == PacketType::client_INPUT) {
-                    PlayerInputPacket* input = (PlayerInputPacket*)event.packet->data;
-                    uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
+                    PacketHeader* header = (PacketHeader*)event.packet->data;
 
-                    if (gameScene.objects.count(playerId)) {
-                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[playerId]);
-                        if (p) {
-                            p->ApplyInput(input->movement);
-                            p->aimTarget = input->aimTarget;
-                            p->wantsToShoot = input->isShooting;
+                    if (header->type == PacketType::client_PING) {
+                        PingPacket* pingIn = (PingPacket*)event.packet->data;
+                        PingPacket pongOut;
+                        pongOut.type = PacketType::server_PONG;
+                        pongOut.timestamp = pingIn->timestamp;
+
+                        ENetPacket* p = enet_packet_create(&pongOut, sizeof(PingPacket), ENET_PACKET_FLAG_UNSEQUENCED);
+                        enet_peer_send(event.peer, 0, p);
+                    }
+
+                    else if (header->type == PacketType::client_INPUT) {
+                        PlayerInputPacket* input = (PlayerInputPacket*)event.packet->data;
+                        uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
+                        if (gameScene.objects.count(playerId)) {
+                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[playerId]);
+                            if (p) {
+                                p->ApplyInput(input->movement);
+                                p->aimTarget = input->aimTarget;
+                                p->wantsToShoot = input->isShooting;
+                            }
                         }
                     }
+
+                    enet_packet_destroy(event.packet);
+                    break;
                 }
-                enet_packet_destroy(event.packet);
-                break;
+                case ENET_EVENT_TYPE_DISCONNECT:
+                    uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
+                    gameScene.objects.erase(playerId);
+                    std::cout << "Client disconnected.\n";
+                }
+                if (GetTime() - lastHeartbeatTime > 5.0 && masterPeer) {
+                    lastHeartbeatTime = GetTime();
+                    MasterHeartbeatPacket hb;
+                    hb.type = PacketType::master_HEARTBEAT;
+                    hb.currentPlayers = (uint8_t)gameScene.objects.size(); // Или счетчик игроков
+
+                    ENetPacket* p = enet_packet_create(&hb, sizeof(hb), ENET_PACKET_FLAG_UNSEQUENCED);
+                    enet_peer_send(masterPeer, 0, p);
+                }
             }
-            case ENET_EVENT_TYPE_DISCONNECT:
-                uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
-                gameScene.objects.erase(playerId);
-                std::cout << "Client disconnected.\n";
-            }
+
         }
 
-        // Физический апдейт
+        // --- LAN DISCOVERY (Отдельная проверка сокета, если ENet это не перехватил) ---
+        // Примечание: ENet сам не обрабатывает broadcast пакеты без подключения в стандартном цикле событий 
+        // так, как нам хотелось бы для Discovery без коннекта.
+        // Но для упрощения, мы будем считать, что клиент "подключается" на сек, шлет запрос и отключается,
+        // ИЛИ (лучше) используем отдельный socket механизм, но в рамках ENet проще сделать так:
+        // Клиент делает connect, шлет пакет Discovery, сервер отвечает и клиент делает disconnect.
+
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
         }
 
-        // Рассылка снапшота (раз в 2 тика, например, или каждый тик)
         static double snapshotTimer = 0;
         snapshotTimer += frameTime;
-        if (snapshotTimer > 0.05) { // 20 раз в секунду
-            snapshotTimer = 0;
+        if (snapshotTimer > 0.05) {
             auto data = gameScene.SerializeSnapshot();
-
             ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_UNSEQUENCED);
             enet_host_broadcast(server, 1, packet);
         }
 
-        // Небольшой sleep, чтобы не грузить CPU на 100% в пустом цикле
         WaitTime(0.001);
     }
 }
@@ -1355,6 +1618,12 @@ class ServerHost {
     std::atomic<bool> running;
     std::thread serverThread;
 
+    ENetHost* gameServerHost = nullptr;
+
+    ENetHost* masterClientHost = nullptr;
+    ENetPeer* masterPeer = nullptr;
+    double lastHeartbeatTime = 0;
+
 public:
     ServerHost();
     ~ServerHost();
@@ -1363,6 +1632,9 @@ public:
     void Stop();
 
     void ServerLoop();
+
+    void ConnectToMaster();
+    void SendHeartbeat();
 };
 // engine\ECS\Bullet.h
 ﻿#pragma once
@@ -1916,7 +2188,7 @@ public:
 ﻿#server module CMakeLists.txt
 add_executable(GameServer
     main_server.cpp
-)
+ "MasterServerLogic.h")
 target_include_directories(GameServer PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_link_libraries(GameServer PRIVATE GameEngine GameCommon enet::enet_shared)
 
@@ -1957,3 +2229,131 @@ int main() {
     enet_deinitialize();
     return 0;
 }
+// server\MasterServerLogic.h
+﻿#pragma once
+#include <enet.h>
+#include <map>
+#include <string>
+#include <vector>
+#include <iostream>
+#include "../common/NetworkPackets.h"
+
+struct ActiveLobby {
+    ENetAddress address;
+    uint16_t gamePort;  
+    std::string name;
+    std::string map;
+    int players;
+    int maxPlayers;
+    double lastHeartbeatTime;
+};
+
+class MasterServer {
+    ENetHost* host = nullptr;
+    std::map<std::string, ActiveLobby> lobbies; 
+
+public:
+    bool Start(int port) {
+        ENetAddress address;
+        address.host = ENET_HOST_ANY;
+        address.port = port;
+        host = enet_host_create(&address, 32, 2, 0, 0);
+        return host != nullptr;
+    }
+
+    void Update() {
+        if (!host) return;
+
+        ENetEvent event;
+        while (enet_host_service(host, &event, 0) > 0) {
+            switch (event.type) {
+            case ENET_EVENT_TYPE_RECEIVE:
+                OnPacket(event.peer, event.packet);
+                enet_packet_destroy(event.packet);
+                break;
+            case ENET_EVENT_TYPE_DISCONNECT:
+                
+                break;
+            }
+        }
+
+        double now = GetTime();
+        for (auto it = lobbies.begin(); it != lobbies.end();) {
+            if (now - it->second.lastHeartbeatTime > 15.0) {
+                std::cout << "Server timed out: " << it->second.name << "\n";
+                it = lobbies.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
+
+    void OnPacket(ENetPeer* peer, ENetPacket* packet) {
+        if (packet->dataLength < sizeof(PacketHeader)) return;
+        PacketHeader* header = (PacketHeader*)packet->data;
+
+        char ipStr[64];
+        enet_address_get_host_ip(&peer->address, ipStr, 64);
+        std::string key = std::string(ipStr) + ":" + std::to_string(peer->address.port);
+
+        if (header->type == PacketType::master_REGISTER) {
+            auto* pkt = (MasterRegisterPacket*)packet->data;
+            ActiveLobby lobby;
+            lobby.address = peer->address;
+            lobby.gamePort = pkt->gamePort;
+            lobby.name = pkt->serverName;
+            lobby.map = pkt->mapName;
+            lobby.maxPlayers = pkt->maxPlayers;
+            lobby.players = 0;
+            lobby.lastHeartbeatTime = GetTime();
+
+            lobbies[key] = lobby;
+            std::cout << "Registered server: " << lobby.name << " at " << ipStr << "\n";
+        }
+        else if (header->type == PacketType::master_HEARTBEAT) {
+            auto* pkt = (MasterHeartbeatPacket*)packet->data;
+            if (lobbies.count(key)) {
+                lobbies[key].lastHeartbeatTime = GetTime();
+                lobbies[key].players = pkt->currentPlayers;
+            }
+        }
+        else if (header->type == PacketType::master_LIST_REQ) {
+            SendList(peer);
+        }
+    }
+
+    void SendList(ENetPeer* peer) {
+        size_t dataSize = sizeof(MasterListResponsePacket) + (lobbies.size() * sizeof(LobbyInfo));
+        std::vector<uint8_t> buffer(dataSize);
+
+        MasterListResponsePacket* header = (MasterListResponsePacket*)buffer.data();
+        header->type = PacketType::master_LIST_RES;
+        header->count = (uint16_t)lobbies.size();
+
+        LobbyInfo* infos = (LobbyInfo*)(buffer.data() + sizeof(MasterListResponsePacket));
+        int i = 0;
+        for (const auto& pair : lobbies) {
+            const auto& lobby = pair.second;
+            infos[i].id = i;
+            infos[i].players = lobby.players;
+            infos[i].maxPlayers = lobby.maxPlayers;
+            infos[i].port = lobby.gamePort;
+
+            char ipBuf[64];
+            enet_address_get_host_ip(&lobby.address, ipBuf, 64);
+            strncpy(infos[i].ip, ipBuf, 16);
+
+            strncpy(infos[i].name, lobby.name.c_str(), 31);
+            strncpy(infos[i].mapName, lobby.map.c_str(), 31);
+            i++;
+        }
+
+        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), ENET_PACKET_FLAG_RELIABLE);
+        enet_peer_send(peer, 0, packet);
+    }
+
+    void Stop() {
+        if (host) enet_host_destroy(host);
+    }
+};
