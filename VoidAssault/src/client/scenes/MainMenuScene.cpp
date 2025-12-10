@@ -1,196 +1,142 @@
-﻿#define _CRT_SECURE_NO_WARNINGS // Исправлено: для strcpy/sprintf
+﻿#define _CRT_SECURE_NO_WARNINGS
 #include "MainMenuScene.h"
-#include "raygui.h"
-#include "GameClient.h"
+#include "raygui_wrapper.h"
+#include "../GameClient.h"
 #include "engine/Utils/ConfigManager.h"
 #include <cstring>
 #include <string>
+#include <thread>
 
-enum MenuState { MAIN, MULTIPLAYER, SETTINGS };
-static MenuState currentMenuState = MAIN;
-static int mpTab = 0; // 0=Internet, 1=LAN (Disabled), 2=Direct/Favorites
-static int selectedServerIndex = -1;
-static std::string statusMessage = "";
+enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
+static MenuState currentState = STATE_MAIN;
+
+static int mpTab = 0;
+static char ipBuffer[64] = "";
+static char portBuffer[16] = "";
+static char nameBuffer[32] = "";
+static bool editIp = false;
+static bool editPort = false;
+static bool editName = false;
 
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
 
 void MainMenuScene::Enter() {
     ClientConfig& cfg = ConfigManager::GetClient();
-    ServerConfig& sCfg = ConfigManager::GetServer();
-
     strcpy(ipBuffer, cfg.lastIp.c_str());
-    sprintf(portBuffer, "%d", cfg.lastPort > 0 ? cfg.lastPort : sCfg.port);
+    sprintf(portBuffer, "%d", cfg.lastPort);
     strcpy(nameBuffer, cfg.playerName.c_str());
-    statusMessage = "";
-    selectedServerIndex = -1;
+    currentState = STATE_MAIN;
 }
 
 void MainMenuScene::Draw() {
     ClearBackground(GetColor(0x181818FF));
     int w = GetScreenWidth();
     int h = GetScreenHeight();
+    float cx = w / 2.0f;
 
-    const char* title = ConfigManager::Text("title_void_assault");
-    DrawText(title, w / 2 - MeasureText(title, 60) / 2, 40, 60, WHITE);
+    const char* title = "VOID ASSAULT";
+    DrawText(title, cx - MeasureText(title, 60) / 2, 50, 60, WHITE);
 
-    if (currentMenuState == MAIN) {
-        float btnW = 300; float btnH = 50; float startY = 180; float spacing = 65;
+    if (currentState == STATE_MAIN) {
+        float startY = 200;
+        float btnW = 300; float btnH = 50; float spacing = 70;
 
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
-            game->StartHost(7777);
-            if (game->localServer) {
-                game->network.Connect("127.0.0.1", 7777);
-            }
-            else {
-                statusMessage = "Error: Port 7777 is busy!";
-            }
+        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
+            std::thread([this]() {
+                int realPort = game->StartHost(7777);
+                if (realPort > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                    game->network.Connect("127.0.0.1", realPort);
+                }
+                }).detach();
         }
 
-        // --- MULTIPLAYER ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
-            currentMenuState = MULTIPLAYER;
+        if (GuiButton({ cx - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
+            currentState = STATE_MULTIPLAYER;
         }
 
-        // --- SETTINGS ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
-            currentMenuState = SETTINGS;
+        if (GuiButton({ cx - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
+            currentState = STATE_SETTINGS;
         }
 
-        // --- EXIT ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
+        if (GuiButton({ cx - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
             CloseWindow();
         }
-
-        if (!statusMessage.empty()) {
-            DrawText(statusMessage.c_str(), w / 2 - MeasureText(statusMessage.c_str(), 20) / 2, h - 50, 20, RED);
-        }
     }
-    else if (currentMenuState == MULTIPLAYER) {
-
-        GuiGroupBox({ (float)w / 2 - 250, 100, 500, 60 }, ConfigManager::Text("lbl_player_setup"));
-        GuiLabel({ (float)w / 2 - 230, 120, 80, 30 }, "Nickname:");
-        if (GuiTextBox({ (float)w / 2 - 150, 120, 300, 30 }, nameBuffer, 32, isEditingName)) {
-            isEditingName = !isEditingName;
-            ConfigManager::GetClient().playerName = std::string(nameBuffer);
+    else if (currentState == STATE_MULTIPLAYER) {
+        GuiLabel({ cx - 150, 130, 300, 20 }, "Nickname:");
+        if (GuiTextBox({ cx - 150, 150, 300, 30 }, nameBuffer, 32, editName)) {
+            editName = !editName;
+            ConfigManager::GetClient().playerName = nameBuffer;
             ConfigManager::Save();
         }
 
-        GuiToggleGroup({ (float)w / 2 - 300, 180, 200, 40 }, "ONLINE;LAN (Disabled);DIRECT / HOST", &mpTab);
+        GuiToggleGroup({ cx - 200, 210, 200, 40 }, "JOIN GAME;HOST GAME", &mpTab);
 
-        float listX = (float)w / 2 - 300;
-        float listY = 240;
-        float listW = 600;
-        float listH = 300;
+        float panelY = 270;
+        GuiGroupBox({ cx - 250, panelY, 500, 300 }, mpTab == 0 ? "Join Server" : "Create Server");
 
-        GuiGroupBox({ listX, listY, listW, listH }, "Server List");
+        if (mpTab == 0) { // JOIN
+            float inY = panelY + 40;
+            GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
+            if (GuiTextBox({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp)) editIp = !editIp;
 
-        if (mpTab == 0) { // ONLINE LIST
-            float startY = 280;
+            GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
+            if (GuiTextBox({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
 
-            // Кнопка Refresh
-            if (GuiButton({ (float)w / 2 + 150, startY - 40, 100, 30 }, "REFRESH")) {
-                game->network.RequestServerList();
-            }
-
-            // Статус
-            if (game->network.isWaitingForList) {
-                GuiLabel({ (float)w / 2 - 50, startY, 200, 30 }, "Fetching list...");
-            }
-            else if (game->network.lobbyList.empty()) {
-                GuiLabel({ (float)w / 2 - 80, startY, 200, 30 }, "No servers found.");
-            }
-            else {
-                int yOffset = 0;
-                for (const auto& lobby : game->network.lobbyList) {
-                    std::string text = std::string(lobby.name) + " | Map: " + lobby.mapName +
-                        " | " + std::to_string(lobby.players) + "/" + std::to_string(lobby.maxPlayers);
-
-                    if (GuiButton({ (float)w / 2 - 200, startY + (float)yOffset, 300, 30 }, text.c_str())) {
-                        std::string ip = lobby.ip;
-                        int port = lobby.port;
-                        game->network.Connect(ip, port);
-                    }
-                    yOffset += 40;
-                }
-            }
-        }
-        else if (mpTab == 1) {
-            // LAN (Убрано из кода по запросу, заглушка)
-            GuiLabel({ listX + 20, listY + 40, 300, 30 }, "LAN Scanning disabled.");
-        }
-        else if (mpTab == 2) { // DIRECT / FAVORITES
-            float subY = listY + 20;
-
-            GuiLabel({ listX + 20, subY, 200, 30 }, "--- CREATE LOBBY ---");
-            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "Port:");
-            if (GuiTextBox({ listX + 70, subY + 40, 80, 30 }, portBuffer, 6, isEditingPort)) isEditingPort = !isEditingPort;
-
-            if (GuiButton({ listX + 170, subY + 40, 150, 30 }, "HOST SERVER")) {
-                int port = atoi(portBuffer);
-                ConfigManager::GetServer().port = port;
+            if (GuiButton({ cx - 100, inY + 60, 200, 40 }, "CONNECT")) {
+                ConfigManager::GetClient().lastIp = ipBuffer;
+                ConfigManager::GetClient().lastPort = atoi(portBuffer);
                 ConfigManager::Save();
-                game->StartHost(port);
-                if (game->localServer) {
-                    game->network.Connect("127.0.0.1", port);
-                }
-                else {
-                    statusMessage = "Failed to bind port (Already in use?)";
-                }
+                game->network.Connect(ipBuffer, atoi(portBuffer));
             }
 
-            subY += 100;
-            DrawLine((int)listX, (int)subY, (int)(listX + listW), (int)subY, GRAY);
-            subY += 20;
-
-            GuiLabel({ listX + 20, subY, 200, 30 }, "--- DIRECT CONNECT ---");
-            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "IP:");
-            if (GuiTextBox({ listX + 70, subY + 40, 200, 30 }, ipBuffer, 64, isEditingIp)) isEditingIp = !isEditingIp;
-
-            if (GuiButton({ listX + 280, subY + 40, 120, 30 }, "ADD FAVORITE")) {
-                SavedServer sv;
-                sv.ip = std::string(ipBuffer);
-                sv.port = atoi(portBuffer);
-                sv.name = "Custom Server";
-                ConfigManager::GetClient().favoriteServers.push_back(sv);
-                ConfigManager::Save();
-            }
-
-            if (GuiButton({ listX + 410, subY + 40, 150, 30 }, "CONNECT")) {
-                int port = atoi(portBuffer);
-                game->network.Connect(ipBuffer, port);
-            }
-
-            subY += 80;
-            GuiLabel({ listX + 20, subY, 200, 20 }, "Favorites:");
+            // Favorites list
+            GuiLabel({ cx - 200, inY + 120, 200, 20 }, "Favorites:");
             auto& favs = ConfigManager::GetClient().favoriteServers;
-            for (int i = 0; i < favs.size() && i < 3; i++) {
-                std::string label = favs[i].ip + ":" + std::to_string(favs[i].port);
-                if (GuiButton({ listX + 20, subY + 25 + (i * 35.0f), 300, 30 }, label.c_str())) {
-                    strcpy(ipBuffer, favs[i].ip.c_str());
-                    sprintf(portBuffer, "%d", favs[i].port);
+            for (size_t i = 0; i < favs.size() && i < 3; i++) {
+                std::string label = favs[i].name + " (" + favs[i].ip + ")";
+                if (GuiButton({ cx - 200, inY + 145 + (i * 35.0f), 400, 30 }, label.c_str())) {
                     game->network.Connect(favs[i].ip, favs[i].port);
                 }
             }
         }
-        if (GuiButton({ 20, 20, 100, 40 }, ConfigManager::Text("btn_back"))) {
-            currentMenuState = MAIN;
-            statusMessage = "";
+        else { // HOST
+            float inY = panelY + 80;
+            GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
+            if (GuiTextBox({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
+
+            if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
+                int port = atoi(portBuffer);
+                std::thread([this, port]() {
+                    int p = game->StartHost(port);
+                    if (p > 0) {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                        game->network.Connect("127.0.0.1", p);
+                    }
+                    }).detach();
+            }
         }
 
-        if (!statusMessage.empty()) {
-            DrawText(statusMessage.c_str(), listX, listY + listH + 70, 20, RED);
+        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
+            currentState = STATE_MAIN;
         }
     }
-    else if (currentMenuState == SETTINGS) {
-        if (GuiButton({ (float)w / 2 - 100, 200, 200, 40 }, "Language: RU / EN")) {
-            ClientConfig& cfg = ConfigManager::GetClient();
-            cfg.language = (cfg.language == "ru") ? "en" : "ru";
-            ConfigManager::LoadLanguage(cfg.language);
-            ConfigManager::Save();
+    else if (currentState == STATE_SETTINGS) {
+        float startY = 200;
+        GuiLabel({ cx - 150, startY, 300, 20 }, "Master Volume");
+        float vol = game->audio.GetVolume();
+        if (GuiSlider({ cx - 150, startY + 25, 300, 30 }, "0", "1", &vol, 0, 1)) {
+            game->audio.SetVolume(vol);
         }
 
-        if (GuiButton({ 20, 20, 100, 40 }, ConfigManager::Text("btn_back"))) {
-            currentMenuState = MAIN;
+        startY += 80;
+        if (GuiButton({ cx - 150, startY, 300, 40 }, "Toggle Fullscreen")) {
+            ToggleFullscreen();
+        }
+
+        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
+            currentState = STATE_MAIN;
         }
     }
 }

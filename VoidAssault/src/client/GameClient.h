@@ -26,7 +26,7 @@ public:
     void ReturnToMenu();
 
     void StartHost();
-    void StartHost(int port);
+    int StartHost(int port);
     void StopHost();
 
     int GetWidth() const { return GetScreenWidth(); }

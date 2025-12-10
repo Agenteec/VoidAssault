@@ -4,7 +4,6 @@
 #endif
 
 #include <enet.h>
-
 #include <thread>
 #include <atomic>
 #include "Scenes/GameScene.h"
@@ -12,14 +11,8 @@
 class ServerHost {
     ENetHost* server = nullptr;
     GameScene gameScene;
-    std::atomic<bool> running;
+    std::atomic<bool> running{ false };
     std::thread serverThread;
-
-    ENetHost* gameServerHost = nullptr;
-
-    ENetHost* masterClientHost = nullptr;
-    ENetPeer* masterPeer = nullptr;
-    double lastHeartbeatTime = 0;
 
 public:
     ServerHost();
@@ -29,7 +22,4 @@ public:
     void Stop();
 
     void ServerLoop();
-
-    void ConnectToMaster();
-    void SendHeartbeat();
 };

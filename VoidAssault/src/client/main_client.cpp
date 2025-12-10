@@ -46,6 +46,10 @@ Font LoadFont() {
 	return mainFont;
 }
 int main() {
+    if (enet_initialize() != 0) {
+        return -1;
+    }
+    atexit(enet_deinitialize);
     GameClient game;
     std::string configPath = "./";
 

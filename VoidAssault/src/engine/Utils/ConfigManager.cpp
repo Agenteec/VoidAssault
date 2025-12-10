@@ -10,7 +10,6 @@ void ConfigManager::Initialize(const std::string& savePath) {
         try { std::filesystem::create_directories(savePath); }
         catch (const std::exception& e) { std::cerr << e.what() << std::endl; }
     }
-
     configPath = savePath + "config.json";
     Load();
     LoadFonts();
@@ -18,18 +17,15 @@ void ConfigManager::Initialize(const std::string& savePath) {
 }
 
 void ConfigManager::CreateDefaultConfig() {
-    std::cout << "Creating default config..." << std::endl;
-    config.client.playerName = "Rookie";
+    config.client.playerName = "Player";
     config.client.lastIp = "127.0.0.1";
-    config.client.language = "ru";
     config.server.port = 7777;
+    config.client.favoriteServers.push_back({ "Localhost", "127.0.0.1", 7777 });
     Save();
 }
 
 void ConfigManager::Save() {
     json j;
-
-    // Сериализация избранного
     json jFav = json::array();
     for (const auto& s : config.client.favoriteServers) {
         jFav.push_back({ {"name", s.name}, {"ip", s.ip}, {"port", s.port} });
@@ -38,18 +34,14 @@ void ConfigManager::Save() {
     j["client"] = {
         {"playerName", config.client.playerName},
         {"lastIp", config.client.lastIp},
+        {"lastPort", config.client.lastPort},
         {"language", config.client.language},
-        {"masterServerIp", config.client.masterServerIp},   // Save
-        {"masterServerPort", config.client.masterServerPort}, // Save
-        {"masterVolume", config.client.masterVolume},
-        {"musicVolume", config.client.musicVolume},
         {"fullscreen", config.client.fullscreen},
         {"targetFPS", config.client.targetFPS},
-        {"favorites", jFav} // Save Favorites
+        {"favorites", jFav}
     };
     j["server"] = {
-        {"port", config.server.port},
-        {"maxPlayers", config.server.maxPlayers}
+        {"port", config.server.port}
     };
 
     std::ofstream file(configPath);
@@ -66,15 +58,11 @@ void ConfigManager::Load() {
                 auto& c = j["client"];
                 config.client.playerName = c.value("playerName", "Player");
                 config.client.lastIp = c.value("lastIp", "127.0.0.1");
-                config.client.language = c.value("language", "ru");
-                config.client.masterServerIp = c.value("masterServerIp", "127.0.0.1");
-                config.client.masterServerPort = c.value("masterServerPort", 7777);
+                config.client.lastPort = c.value("lastPort", 7777);
                 config.client.targetFPS = c.value("targetFPS", 60);
-                config.client.fullscreen = c.value("fullscreen", false);
 
-                // Загрузка избранного
-                config.client.favoriteServers.clear();
                 if (c.contains("favorites")) {
+                    config.client.favoriteServers.clear();
                     for (auto& elem : c["favorites"]) {
                         SavedServer s;
                         s.name = elem.value("name", "Server");
@@ -85,8 +73,7 @@ void ConfigManager::Load() {
                 }
             }
             if (j.contains("server")) {
-                auto& s = j["server"];
-                config.server.port = s.value("port", 7777);
+                config.server.port = j["server"].value("port", 7777);
             }
         }
         catch (...) { CreateDefaultConfig(); }
@@ -97,62 +84,35 @@ void ConfigManager::LoadFonts() {
     int codepoints[512] = { 0 };
     for (int i = 0; i < 95; i++) codepoints[i] = 32 + i;
     for (int i = 0; i < 255; i++) codepoints[96 + i] = 0x400 + i;
-
     const char* fontPath = "assets/fonts/Roboto-Regular.ttf";
     if (FileExists(fontPath)) {
 #ifdef ANDROID
         mainFont = LoadFontEx(fontPath, 60, codepoints, 512);
 #else
         mainFont = LoadFontEx(fontPath, 32, codepoints, 512);
-#endif // ANDROID
+#endif 
     }
-    else {
-        mainFont = GetFontDefault();
-    }
+    else { mainFont = GetFontDefault(); }
 }
-
-void ConfigManager::UnloadResources() {
-    if (mainFont.texture.id != 0) UnloadFont(mainFont);
-}
-
+void ConfigManager::UnloadResources() { if (mainFont.texture.id != 0) UnloadFont(mainFont); }
 void ConfigManager::LoadLanguage(const std::string& langCode) {
     localizedStrings.clear();
     std::string path = "assets/lang/lang_" + langCode + ".json";
-
     char* text = LoadFileText(path.c_str());
     if (text) {
         try {
             json j = json::parse(text);
-            for (auto& element : j.items()) {
-                localizedStrings[element.key()] = element.value().get<std::string>();
-            }
+            for (auto& element : j.items()) localizedStrings[element.key()] = element.value().get<std::string>();
         }
-        catch (...) { std::cerr << "Lang parse error\n"; }
+        catch (...) {}
         UnloadFileText(text);
     }
-    else {
-        std::cerr << "Lang file not found: " << path << std::endl;
-    }
 }
-
 const char* ConfigManager::Text(const std::string& key) {
     if (localizedStrings.count(key)) return localizedStrings[key].c_str();
     return key.c_str();
 }
-
-ClientConfig& ConfigManager::GetClient() {
-    return config.client;
-}
-
-ServerConfig& ConfigManager::GetServer() {
-    return config.server;
-}
-
-Font ConfigManager::GetFont() {
-    return mainFont;
-}
-
-void ConfigManager::SetFont(Font font)
-{
-    mainFont = font;
-}
+ClientConfig& ConfigManager::GetClient() { return config.client; }
+ServerConfig& ConfigManager::GetServer() { return config.server; }
+Font ConfigManager::GetFont() { return mainFont; }
+void ConfigManager::SetFont(Font font) { mainFont = font; }
