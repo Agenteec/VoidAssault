@@ -32,8 +32,8 @@ Font LoadFont() {
     int* completeCodepoints = GetCompleteCodepoints(&codepointCount);
 	Font mainFont;
 #ifdef ANDROID
-    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 70, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 58);
+    mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 40, completeCodepoints, codepointCount);
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 36);
 #else
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 36, completeCodepoints, codepointCount);
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
