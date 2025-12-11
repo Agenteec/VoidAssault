@@ -9,7 +9,7 @@
 #include <chrono>
 
 #ifdef ANDROID
-#include "external/raymob/raymob.h"
+#include "raymob.h"
 #endif // ANDROID
 
 
