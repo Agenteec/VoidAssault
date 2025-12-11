@@ -2,7 +2,7 @@
 #include "../../engine/Scenes/Scene.h"
 #include "../../common/NetworkPackets.h"
 #include "../ParticleSystem.h"
-#include "../VirtualJoystick.h"
+#include "../vircontrols/VirtualJoystick.h"
 #include "raymath.h"
 #include <map>
 #include <vector>

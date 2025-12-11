@@ -1,4 +1,4 @@
-﻿    file(GLOB CLIENT_SOURCES "*.cpp" "scenes/*.cpp")
+﻿    file(GLOB CLIENT_SOURCES "*.cpp" "scenes/*.cpp" "vircontrols/*.cpp")
 #file(GLOB_RECURSE Imgui_SFML_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/../imgui-sfml/*.*")
 if(WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux" OR LINUX)
 

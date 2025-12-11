@@ -8,10 +8,7 @@
 #include <thread>
 #include <chrono>
 
-#ifdef ANDROID
-#include "raymob.h"
-#endif // ANDROID
-
+static InGameKeyboard virtualKeyboard;
 
 enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
 static MenuState currentState = STATE_MAIN;
@@ -20,6 +17,7 @@ static int mpTab = 0;
 static char ipBuffer[64] = "";
 static char portBuffer[16] = "";
 static char nameBuffer[32] = "";
+
 static bool editIp = false;
 static bool editPort = false;
 static bool editName = false;
@@ -31,7 +29,34 @@ void MainMenuScene::Enter() {
     strcpy(ipBuffer, cfg.lastIp.c_str());
     sprintf(portBuffer, "%d", cfg.lastPort);
     strcpy(nameBuffer, cfg.playerName.c_str());
+
     currentState = STATE_MAIN;
+
+    virtualKeyboard.Hide();
+    editIp = false;
+    editPort = false;
+    editName = false;
+}
+
+bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode) {
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+
+    if (GuiTextBox(bounds, buffer, bufferSize, false)) {
+        if (!virtualKeyboard.IsActive()) {
+            virtualKeyboard.Show(buffer, bufferSize);
+        }
+    }
+    if (virtualKeyboard.IsActive()) {
+    }
+    return false;
+#else
+
+    if (GuiTextBox(bounds, buffer, bufferSize, editMode)) {
+        editMode = !editMode;
+        return true;
+    }
+    return false;
+#endif
 }
 
 void MainMenuScene::Draw() {
@@ -40,8 +65,19 @@ void MainMenuScene::Draw() {
     int h = GetScreenHeight();
     float cx = w / 2.0f;
 
+    bool kbdActive = virtualKeyboard.IsActive();
+    if (kbdActive) {
+        GuiDisable();
+    }
+
+    // Заголовок
     const char* title = "VOID ASSAULT";
-    DrawText(title, cx - MeasureText(title, 60) / 2, 50, 60, WHITE);
+    int fontSize = 60;
+#if defined(PLATFORM_ANDROID)
+    fontSize = 80;
+#endif
+    DrawText(title, cx - MeasureText(title, fontSize) / 2, 50, fontSize, WHITE);
+
 
     if (currentState == STATE_MAIN) {
         float startY = 200;
@@ -70,11 +106,13 @@ void MainMenuScene::Draw() {
         }
     }
     else if (currentState == STATE_MULTIPLAYER) {
-        GuiLabel({ cx - 150, 130, 300, 20 }, "Nickname:");
-        if (GuiTextBox({ cx - 150, 150, 300, 30 }, nameBuffer, 32, editName)) {
-            editName = !editName;
+        float nameY = 130;
+        GuiLabel({ cx - 150, nameY, 300, 20 }, "Nickname:");
+
+        DrawInputField({ cx - 150, nameY + 20, 300, 30 }, nameBuffer, 32, editName);
+
+        if (!editName && !kbdActive) {
             ConfigManager::GetClient().playerName = nameBuffer;
-            ConfigManager::Save();
         }
 
         GuiToggleGroup({ cx - 200, 210, 200, 40 }, "JOIN GAME;HOST GAME", &mpTab);
@@ -84,15 +122,12 @@ void MainMenuScene::Draw() {
 
         if (mpTab == 0) {
             float inY = panelY + 40;
-            GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
-            if (GuiTextBox({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp)) editIp = !editIp;
-#ifdef ANDROID
-            ShowSoftKeyboard();
-#endif // ANDROID
 
+            GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
+            DrawInputField({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp);
 
             GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
-            if (GuiTextBox({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
+            DrawInputField({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort);
 
             if (GuiButton({ cx - 100, inY + 60, 200, 40 }, "CONNECT")) {
                 ConfigManager::GetClient().lastIp = ipBuffer;
@@ -113,15 +148,13 @@ void MainMenuScene::Draw() {
         else {
             float inY = panelY + 80;
             GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
-            if (GuiTextBox({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
+
+            DrawInputField({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort);
 
             if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
                 int port = atoi(portBuffer);
-
                 int p = game->StartHost(port);
                 if (p > 0) {
-                    //std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
                     game->netClient->connect("127.0.0.1", p);
                 }
             }
@@ -140,12 +173,35 @@ void MainMenuScene::Draw() {
         }
 
         startY += 80;
+#ifndef PLATFORM_ANDROID
         if (GuiButton({ cx - 150, startY, 300, 40 }, "Toggle Fullscreen")) {
             ToggleFullscreen();
         }
+#endif
 
         if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
             currentState = STATE_MAIN;
+        }
+    }
+
+    if (kbdActive) {
+        GuiEnable();
+
+        DrawRectangle(0, 0, w, h, Fade(BLACK, 0.7f));
+
+
+        virtualKeyboard.Draw();
+
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+            float safeZoneY = (float)h * 0.4f; 
+            if (GetMouseY() < safeZoneY) {
+                virtualKeyboard.Hide();
+
+                ConfigManager::GetClient().playerName = nameBuffer;
+                ConfigManager::GetClient().lastIp = ipBuffer;
+                ConfigManager::GetClient().lastPort = atoi(portBuffer);
+                ConfigManager::Save();
+            }
         }
     }
 }

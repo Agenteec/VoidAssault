@@ -1,11 +1,9 @@
-﻿// Определяем реализацию raygui ПЕРЕД включением заголовков
-#define RAYGUI_IMPLEMENTATION
+﻿#define RAYGUI_IMPLEMENTATION
 #include "raygui_wrapper.h" 
 
 #include "GameClient.h"
 #include "engine/Utils/ConfigManager.h"
 
-// Обязательно подключаем ENet для main функции
 #include <enet.h> 
 
 int* GetCompleteCodepoints(int* count) {
@@ -44,21 +42,20 @@ Font LoadFont() {
 #else
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
 #endif 
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20); // GuiSetStyle теперь будет виден
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
     free(completeCodepoints);
-    GuiSetFont(mainFont); // GuiSetFont теперь будет виден
+    GuiSetFont(mainFont);
     return mainFont;
 }
 
 int main() {
-    // Инициализация ENet глобально
+
     if (enet_initialize() != 0) {
         return -1;
     }
     atexit(enet_deinitialize);
 
     {
-        // Создаем игру в области видимости, чтобы деструктор вызвался до atexit
         GameClient game;
         std::string configPath = "./";
 
@@ -78,7 +75,7 @@ int main() {
         }
 
         game.Run();
-    } // Здесь вызовется деструктор GameClient
+    }
 
     return 0;
 }

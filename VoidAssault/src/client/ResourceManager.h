@@ -12,11 +12,6 @@ public:
     }
 
     void Load() {
-        // Загружаем шрифт. Если файла нет, Raylib загрузит дефолтный, но с фильтрацией
-        // В реальном проекте положи файл .ttf в папку assets
-        // mainFont = LoadFontEx("assets/font.ttf", 64, 0, 0);
-
-        // Пока используем дефолтный, но ставим фильтр для гладкости
         mainFont = GetFontDefault();
         SetTextureFilter(mainFont.texture, TEXTURE_FILTER_BILINEAR);
     }

@@ -11,7 +11,7 @@ void GameplayScene::Enter() {
     camera.zoom = 1.0f;
     camera.offset = { w / 2, h / 2 };
 
-    // Инициализация джойстиков
+
     leftStick = std::make_unique<VirtualJoystick>(Vector2{ 150, h - 150 }, 40.0f, 90.0f);
     rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - 150, h - 150 }, 40.0f, 90.0f);
     rightStick->SetColors({ 60, 0, 0, 150 }, { 220, 50, 50, 200 });
@@ -25,32 +25,32 @@ void GameplayScene::Exit() {
 }
 
 void GameplayScene::OnMessage(Message::Shared msg) {
-    // Получаем поток данных
+
     auto stream = msg->stream();
 
-    // Читаем тип пакета (первый байт)
+
     uint8_t packetType = 0;
     stream->read(packetType);
 
     if (packetType == GamePacket::INIT) {
-        // Читаем InitData (просто ID)
+
         stream->read(myPlayerId);
     }
     else if (packetType == GamePacket::SNAPSHOT) {
-        // Читаем количество сущностей
+
         uint32_t entityCount = 0;
         stream->read(entityCount);
 
         std::vector<uint32_t> receivedIds;
         for (uint32_t i = 0; i < entityCount; i++) {
             EntityState st;
-            stream >> st; // Десериализация сущности (через оператор >> в NetworkPackets.h)
+            stream >> st;
 
             receivedIds.push_back(st.id);
             worldEntities[st.id].PushState(st);
         }
 
-        // Удаляем устаревшие сущности
+
         for (auto it = worldEntities.begin(); it != worldEntities.end();) {
             bool found = false;
             for (uint32_t id : receivedIds) if (id == it->first) found = true;
@@ -61,32 +61,30 @@ void GameplayScene::OnMessage(Message::Shared msg) {
 }
 
 void GameplayScene::Update(float dt) {
-    // 1. Обновляем джойстики
+
     leftStick->Update();
     rightStick->Update();
 
     PlayerInputPacket pkt;
-    // pkt.type больше не нужно, тип пишется в stream отдельно
 
-    // 2. Логика движения
     Vector2 moveDir = leftStick->GetAxis();
     pkt.movement = moveDir;
 
-    // Поддержка клавиатуры (WASD)
+
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
     if (IsKeyDown(KEY_D)) pkt.movement.x += 1.0f;
 
-    // Нормализация
+
     if (Vector2Length(pkt.movement) > 1.0f) {
         pkt.movement = Vector2Normalize(pkt.movement);
     }
 
-    // 3. Логика стрельбы
+
     Vector2 aimDir = rightStick->GetAxis();
 
-    if (Vector2Length(aimDir) > 0.2f) { // Deadzone
+    if (Vector2Length(aimDir) > 0.2f) {
         pkt.isShooting = true;
         if (worldEntities.count(myPlayerId)) {
             Vector2 playerPos = worldEntities[myPlayerId].renderPos;

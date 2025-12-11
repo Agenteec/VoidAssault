@@ -7,7 +7,6 @@ GameClient::GameClient() {
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-    // Инициализация ENetClient
     netClient = ENetClient::alloc();
 
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
@@ -68,14 +67,12 @@ void GameClient::Run() {
 
         float dt = GetFrameTime();
 
-        // --- Сетевой цикл ---
         if (netClient) {
             auto msgs = netClient->poll();
 
             for (auto& msg : msgs) {
                 if (msg->type() == MessageType::CONNECT) {
                     TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
-                    // Если мы не в игре, переходим
                     if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
                         ChangeScene(std::make_shared<GameplayScene>(this));
                     }
@@ -87,14 +84,12 @@ void GameClient::Run() {
                     }
                 }
                 else if (msg->type() == MessageType::DATA) {
-                    // Передаем данные в текущую сцену через OnMessage
                     if (currentScene) {
                         currentScene->OnMessage(msg);
                     }
                 }
             }
         }
-        // --------------------
 
         if (currentScene) {
             currentScene->Update(dt);

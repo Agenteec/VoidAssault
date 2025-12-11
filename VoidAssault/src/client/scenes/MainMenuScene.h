@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "../../engine/Scenes/Scene.h"
+#include "../vircontrols/InGameKeyboard.h"
 
 class GameClient;
 
@@ -11,8 +12,7 @@ class MainMenuScene : public Scene {
     bool isEditingIp = false;
     bool isEditingPort = false;
     bool isEditingName = false;
-
-    // Состояние табов
+    InGameKeyboard virtualKeyboard;
     int activeTab = 0; // 0 = Connect, 1 = Host
 
 public:

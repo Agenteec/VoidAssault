@@ -13,7 +13,7 @@ public:
     int screenWidth = 1280;
     int screenHeight = 720;
 
-    // Сетевой клиент
+
     ENetClient::Shared netClient;
 
     std::unique_ptr<ServerHost> localServer;
