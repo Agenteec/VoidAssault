@@ -1,5 +1,4 @@
 ﻿#pragma once
-#include "external/fix_win32_compatibility.h"
 #include "../../engine/Scenes/Scene.h"
 #include "../../common/NetworkPackets.h"
 #include "../ParticleSystem.h"

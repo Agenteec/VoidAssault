@@ -8,6 +8,11 @@
 #include <thread>
 #include <chrono>
 
+#ifdef ANDROID
+#include "external/raymob/raymob.h"
+#endif // ANDROID
+
+
 enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
 static MenuState currentState = STATE_MAIN;
 
@@ -43,13 +48,13 @@ void MainMenuScene::Draw() {
         float btnW = 300; float btnH = 50; float spacing = 70;
 
         if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
-            //std::thread([this]() {
+            std::thread([this]() {
                 int realPort = game->StartHost(7777);
                 if (realPort > 0) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(200));
                     game->netClient->connect("127.0.0.1", realPort);
                 }
-                //}).detach();
+                }).detach();
         }
 
         if (GuiButton({ cx - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
@@ -81,6 +86,10 @@ void MainMenuScene::Draw() {
             float inY = panelY + 40;
             GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
             if (GuiTextBox({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp)) editIp = !editIp;
+#ifdef ANDROID
+            ShowSoftKeyboard();
+#endif // ANDROID
+
 
             GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
             if (GuiTextBox({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort)) editPort = !editPort;

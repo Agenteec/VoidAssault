@@ -1,5 +1,4 @@
 ﻿#pragma once
-#include "external/fix_win32_compatibility.h"
 #include "../../engine/Scenes/Scene.h"
 
 class GameClient;
