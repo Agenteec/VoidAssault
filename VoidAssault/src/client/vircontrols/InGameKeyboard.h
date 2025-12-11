@@ -5,8 +5,8 @@
 #include <vector>
 #include <cstring>
 
-#if defined(ANDROID) || defined(PLATFORM_ANDROID)
-    #define IS_MOBILE_PLATFORM
+#if defined(ANDROID) || defined(PLATFORM_ANDROID) || defined(__ANDROID__)
+#define IS_MOBILE_PLATFORM
 #endif
 
 class InGameKeyboard {

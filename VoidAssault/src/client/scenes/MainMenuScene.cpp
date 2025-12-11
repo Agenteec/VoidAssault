@@ -8,7 +8,7 @@
 #include <thread>
 #include <chrono>
 
-static InGameKeyboard virtualKeyboard;
+
 
 enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
 static MenuState currentState = STATE_MAIN;
@@ -38,19 +38,15 @@ void MainMenuScene::Enter() {
     editName = false;
 }
 
-bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode) {
-#if defined(PLATFORM_ANDROID) || defined(ANDROID)
-
+bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode, InGameKeyboard& kbd) {
+#if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(__ANDROID__)
     if (GuiTextBox(bounds, buffer, bufferSize, false)) {
-        if (!virtualKeyboard.IsActive()) {
-            virtualKeyboard.Show(buffer, bufferSize);
+        if (!kbd.IsActive()) {
+            kbd.Show(buffer, bufferSize);
         }
-    }
-    if (virtualKeyboard.IsActive()) {
     }
     return false;
 #else
-
     if (GuiTextBox(bounds, buffer, bufferSize, editMode)) {
         editMode = !editMode;
         return true;
@@ -70,14 +66,12 @@ void MainMenuScene::Draw() {
         GuiDisable();
     }
 
-    // Заголовок
     const char* title = "VOID ASSAULT";
     int fontSize = 60;
-#if defined(PLATFORM_ANDROID)
+#if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(__ANDROID__)
     fontSize = 80;
 #endif
     DrawText(title, cx - MeasureText(title, fontSize) / 2, 50, fontSize, WHITE);
-
 
     if (currentState == STATE_MAIN) {
         float startY = 200;
@@ -109,7 +103,8 @@ void MainMenuScene::Draw() {
         float nameY = 130;
         GuiLabel({ cx - 150, nameY, 300, 20 }, "Nickname:");
 
-        DrawInputField({ cx - 150, nameY + 20, 300, 30 }, nameBuffer, 32, editName);
+
+        DrawInputField({ cx - 150, nameY + 20, 300, 30 }, nameBuffer, 32, editName, virtualKeyboard);
 
         if (!editName && !kbdActive) {
             ConfigManager::GetClient().playerName = nameBuffer;
@@ -124,10 +119,10 @@ void MainMenuScene::Draw() {
             float inY = panelY + 40;
 
             GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
-            DrawInputField({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp);
+            DrawInputField({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp, virtualKeyboard);
 
             GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
-            DrawInputField({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort);
+            DrawInputField({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort, virtualKeyboard);
 
             if (GuiButton({ cx - 100, inY + 60, 200, 40 }, "CONNECT")) {
                 ConfigManager::GetClient().lastIp = ipBuffer;
@@ -149,7 +144,7 @@ void MainMenuScene::Draw() {
             float inY = panelY + 80;
             GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
 
-            DrawInputField({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort);
+            DrawInputField({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort, virtualKeyboard);
 
             if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
                 int port = atoi(portBuffer);
@@ -173,7 +168,7 @@ void MainMenuScene::Draw() {
         }
 
         startY += 80;
-#ifndef PLATFORM_ANDROID
+#if !defined(PLATFORM_ANDROID) && !defined(ANDROID) && !defined(__ANDROID__)
         if (GuiButton({ cx - 150, startY, 300, 40 }, "Toggle Fullscreen")) {
             ToggleFullscreen();
         }
@@ -189,11 +184,10 @@ void MainMenuScene::Draw() {
 
         DrawRectangle(0, 0, w, h, Fade(BLACK, 0.7f));
 
-
         virtualKeyboard.Draw();
 
         if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            float safeZoneY = (float)h * 0.4f; 
+            float safeZoneY = (float)h * 0.4f;
             if (GetMouseY() < safeZoneY) {
                 virtualKeyboard.Hide();
 
