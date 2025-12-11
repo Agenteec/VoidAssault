@@ -28,8 +28,7 @@ elseif(ANDROID)
     GameCommon
     enet::enet_shared
     chipmunk_static
-    nlohmann_json
-    raymoblib)
+    nlohmann_json)
     target_include_directories(gameclient PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_include_directories(gameclient PRIVATE ${PROJECT_INCLUDE_DIR})
     target_include_directories(gameclient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
