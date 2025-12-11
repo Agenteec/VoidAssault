@@ -36,7 +36,7 @@ bool ENetServer::start(uint32_t port)
 {
     if (host_) return true;
 
-    ENetAddress address;
+    ENetAddress address = { 0 };
     address.host = ENET_HOST_ANY;
     address.port = port;
 

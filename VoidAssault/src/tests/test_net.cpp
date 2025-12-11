@@ -9,13 +9,14 @@
 #include "enet/ENetServer.h"
 #include "enet/ENetClient.h"
 
-ENetServer::Shared server;
-ENetClient::Shared client;
+
 std::atomic<bool> serverRunning{ false };
 
 
 std::atomic<bool> running = false;
-int main() {
+
+
+int mainTest() {
     if (enet_initialize() != 0) {
         printf("An error occurred while initializing ENet.\n");
         return 1;
@@ -151,51 +152,56 @@ int main() {
 }
 
 
-void ServerThreadFunc(int port) {
-    if (!server->start(port)) {
-        std::cerr << "SERVER: Failed to start on port " << port << "!" << std::endl;
-        return;
-    }
-    std::cout << "SERVER: Listening on port " << port << std::endl;
-	serverRunning = true;
-    while (serverRunning) {
-        auto msgs = server->poll();
-
-        for (auto& msg : msgs) {
-            if (msg->type() == MessageType::CONNECT) {
-                std::cout << "SERVER: Client connected! ID: " << msg->peerId() << std::endl;
-            }
-            else if (msg->type() == MessageType::DATA) {
-                std::string s;
-                msg->stream()->read(s);
-                std::cout << "SERVER: Received data: " << s << std::endl;
-            }
-            else if (msg->type() == MessageType::DISCONNECT) {
-                std::cout << "SERVER: Client disconnected." << std::endl;
-            }
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    server->stop();
-    std::cout << "SERVER: Stopped." << std::endl;
-}
 
 int mainClient() {
+
+
     if (enet_initialize() != 0) {
         std::cerr << "FATAL: Failed to initialize ENet!" << std::endl;
         return -1;
     }
+    ENetClient::Shared client;
+    ENetServer::Shared server;
     //atexit(enet_deinitialize);
 
     std::cout << "--- STARTING NETWORK TEST ---" << std::endl;
-
-    server = ENetServer::alloc();
-
-
     int port = 7777;
+    server = ENetServer::alloc();
+    if (!server->start(port)) {
+        std::cerr << "SERVER: Failed to start on port " << port << "!" << std::endl;
+        return 1;
+    }
+    std::cout << "SERVER: Listening on port " << port << std::endl;
+    serverRunning = true;
+    std::thread sThread([&]() {
 
-    std::thread sThread(ServerThreadFunc, port);
+
+        while (serverRunning) {
+            auto msgs = server->poll();
+
+            for (auto& msg : msgs) {
+                if (msg->type() == MessageType::CONNECT) {
+                    std::cout << "SERVER: Client connected! ID: " << msg->peerId() << std::endl;
+                }
+                else if (msg->type() == MessageType::DATA) {
+                    std::string s;
+                    msg->stream()->read(s);
+                    std::cout << "SERVER: Received data: " << s << std::endl;
+                }
+                else if (msg->type() == MessageType::DISCONNECT) {
+                    std::cout << "SERVER: Client disconnected." << std::endl;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+
+        server->stop();
+        server.reset();
+        std::cout << "SERVER: Stopped." << std::endl;
+        
+        
+        
+        });
 
     while (!serverRunning)
     {
@@ -229,8 +235,15 @@ int mainClient() {
     }
 
     client.reset();
-    server.reset();
+    
 
     std::cout << "--- TEST FINISHED ---" << std::endl;
     return 0;
+}
+
+
+int main()
+{
+    //mainTest();
+    mainClient();
 }
