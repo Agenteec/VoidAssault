@@ -1,0 +1,50 @@
+﻿#pragma once
+#include "external/fix_win32_compatibility.h"
+#include <ctime>
+#include <string>
+#include <sstream>
+#include "raylib.h"
+
+/**
+ * Precision explicit typedefs
+ */
+typedef float float32_t;
+typedef double float64_t;
+
+/**
+ * Fixed width integer types
+ */
+#include <cstdint>
+
+ /**
+  * Define PI
+  */
+#ifndef M_PI
+#define M_PI 3.14159265358979f
+#endif
+
+  /**
+   * Define EPSILON
+   */
+#ifndef M_EPSILON
+#define M_EPSILON 0.000001f
+#endif
+
+
+
+#define LOG_INFO(stream_input)  do { std::ostringstream s; s << stream_input; TraceLog(3, "[NET] %s", s.str().c_str()); } while(0)
+#define LOG_WARN(stream_input)  do { std::ostringstream s; s << stream_input; TraceLog(4, "[NET WARN] %s", s.str().c_str()); } while(0)
+#define LOG_ERROR(stream_input) do { std::ostringstream s; s << stream_input; TraceLog(5, "[NET ERROR] %s", s.str().c_str()); } while(0)
+#define LOG_DEBUG(stream_input) do { std::ostringstream s; s << stream_input; TraceLog(2, "[NET DEBUG] %s", s.str().c_str()); } while(0)
+
+// ------------------------------------------
+
+/**
+ * Utility lookup for const map types.
+ */
+template <typename T>
+typename T::mapped_type get(T const& map, typename T::key_type const& key)
+{
+    typename T::const_iterator iter(map.find(key));
+    return iter != map.end() ? iter->second : typename T::mapped_type();
+}

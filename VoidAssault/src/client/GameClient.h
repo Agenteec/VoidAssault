@@ -1,17 +1,21 @@
 ﻿#pragma once
 #include "raygui_wrapper.h"
-#include "NetworkManager.h"
+#include "enet/ENetClient.h" 
 #include "../engine/Scenes/Scene.h"
 #include "../engine/ServerHost.h"
 #include "AudioManager.h"
 #include <memory>
+
+class Scene;
 
 class GameClient {
 public:
     int screenWidth = 1280;
     int screenHeight = 720;
 
-    NetworkManager network;
+    // Сетевой клиент
+    ENetClient::Shared netClient;
+
     std::unique_ptr<ServerHost> localServer;
     AudioManager audio;
 
@@ -25,7 +29,6 @@ public:
     void ChangeScene(std::shared_ptr<Scene> newScene);
     void ReturnToMenu();
 
-    void StartHost();
     int StartHost(int port);
     void StopHost();
 

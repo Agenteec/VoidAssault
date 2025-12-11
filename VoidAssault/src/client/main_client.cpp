@@ -1,6 +1,13 @@
-﻿#define RAYGUI_IMPLEMENTATION
+﻿// Определяем реализацию raygui ПЕРЕД включением заголовков
+#define RAYGUI_IMPLEMENTATION
+#include "raygui_wrapper.h" 
+
 #include "GameClient.h"
 #include "engine/Utils/ConfigManager.h"
+
+// Обязательно подключаем ENet для main функции
+#include <enet.h> 
+
 int* GetCompleteCodepoints(int* count) {
     static int completeChars[] = {
             0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027, 0x0028, 0x0029,
@@ -27,49 +34,51 @@ int* GetCompleteCodepoints(int* count) {
     memcpy(result, completeChars, *count * sizeof(int));
     return result;
 }
+
 Font LoadFont() {
     int codepointCount = 0;
     int* completeCodepoints = GetCompleteCodepoints(&codepointCount);
-	Font mainFont;
+    Font mainFont;
 #ifdef ANDROID
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 #else
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
-
-#endif // ANDROID
+#endif 
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 20); // GuiSetStyle теперь будет виден
     free(completeCodepoints);
-
-    GuiSetFont(mainFont);
-
-	return mainFont;
+    GuiSetFont(mainFont); // GuiSetFont теперь будет виден
+    return mainFont;
 }
+
 int main() {
+    // Инициализация ENet глобально
     if (enet_initialize() != 0) {
         return -1;
     }
     atexit(enet_deinitialize);
-    GameClient game;
-    std::string configPath = "./";
+
+    {
+        // Создаем игру в области видимости, чтобы деструктор вызвался до atexit
+        GameClient game;
+        std::string configPath = "./";
 
 #if defined(ANDROID) || defined(PLATFORM_ANDROID)
-
-    configPath = GetApplicationDirectory();
+        configPath = GetApplicationDirectory();
 #endif
 
-    ConfigManager::Initialize(configPath);
+        ConfigManager::Initialize(configPath);
 
+        auto f = LoadFont();
+        ConfigManager::SetFont(f);
+        GuiSetFont(f);
 
-    auto f = LoadFont();
-    ConfigManager::SetFont(f);
-    GuiSetFont(f);
+        SetTargetFPS(ConfigManager::GetClient().targetFPS);
+        if (ConfigManager::GetClient().fullscreen) {
+            ToggleFullscreen();
+        }
 
-    SetTargetFPS(ConfigManager::GetClient().targetFPS);
-    if (ConfigManager::GetClient().fullscreen) {
-        ToggleFullscreen();
-    }
+        game.Run();
+    } // Здесь вызовется деструктор GameClient
 
-    game.Run();
     return 0;
 }

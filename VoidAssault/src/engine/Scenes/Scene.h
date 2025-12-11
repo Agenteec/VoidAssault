@@ -1,8 +1,8 @@
 ﻿#pragma once
-
-#include "raylib.h"
+#include "external/fix_win32_compatibility.h"
 #include <vector>
-#include <cstdint>
+#include <memory>
+#include "net/Message.h" // Подключаем Message из примера
 
 class GameClient;
 
@@ -19,5 +19,6 @@ public:
     virtual void Draw() = 0;
     virtual void DrawGUI() = 0;
     virtual void Exit() = 0;
-    virtual void OnPacketReceived(const uint8_t* data, size_t size) {};
+
+    virtual void OnMessage(Message::Shared msg) {};
 };

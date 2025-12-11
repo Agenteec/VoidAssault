@@ -1,6 +1,6 @@
-﻿add_library(GameCommon SHARED
-    NetworkPackets.h Common.cpp
-)
+﻿file(GLOB COMMON_SOURCES "*.cpp" "net/*.cpp" "serial/*.cpp" "enet/*.cpp" "time/*.cpp")
+
+add_library(GameCommon SHARED ${COMMON_SOURCES})
 
 target_link_libraries(GameCommon PUBLIC enet::enet_shared raylib)
 target_include_directories(GameCommon PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})

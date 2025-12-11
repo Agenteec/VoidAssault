@@ -148,29 +148,23 @@ endif()
 #include "scenes/MainMenuScene.h" 
 #include "scenes/GameplayScene.h"
 
-
-
 GameClient::GameClient() {
-
     InitWindow(screenWidth, screenHeight, "Void Assault");
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-    if (enet_initialize() != 0) {
-        TraceLog(LOG_ERROR, "Failed to init ENet");
-    }
+    // Инициализация ENetClient
+    netClient = ENetClient::alloc();
 
-    if (!network.Init()) {
-        TraceLog(LOG_ERROR, "Failed to create ENet client host");
-    }
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 }
 
 GameClient::~GameClient() {
     StopHost();
     if (currentScene) currentScene->Exit();
-    network.Shutdown();
-    enet_deinitialize();
+
+    if (netClient) netClient->disconnect();
+
     CloseWindow();
 }
 
@@ -178,29 +172,27 @@ void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
     nextScene = newScene;
 }
 
-void GameClient::StartHost() {
-    if (!localServer) {
-        localServer = std::make_unique<ServerHost>();
-        if (localServer->Start(7777)) {
-            TraceLog(LOG_INFO, "Local Server Started!");
-        }
-        else {
-            TraceLog(LOG_ERROR, "Failed to start local server!");
-        }
-    }
+void GameClient::ReturnToMenu() {
+    if (netClient) netClient->disconnect();
+    ChangeScene(std::make_shared<MainMenuScene>(this));
 }
-void GameClient::StartHost(int port) {
-    StopHost();
 
+int GameClient::StartHost(int startPort) {
+    StopHost();
     localServer = std::make_unique<ServerHost>();
-    if (localServer->Start(port)) {
-        TraceLog(LOG_INFO, "Local Server Started on port %d", port);
+
+    for (int p = startPort; p < startPort + 10; p++) {
+        if (localServer->Start(p)) {
+            TraceLog(LOG_INFO, "Local Server Started on port %d", p);
+            return p;
+        }
     }
-    else {
-        TraceLog(LOG_ERROR, "Failed to start local server on port %d!", port);
-        localServer.reset();
-    }
+
+    TraceLog(LOG_ERROR, "Failed to start local server. All ports busy?");
+    localServer.reset();
+    return -1;
 }
+
 void GameClient::StopHost() {
     if (localServer) {
         localServer->Stop();
@@ -222,36 +214,40 @@ void GameClient::Run() {
 
         float dt = GetFrameTime();
 
-        ENetEvent event;
-        while (enet_host_service(network.clientHost, &event, 0) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT:
-                network.isConnected = true;
-                TraceLog(LOG_INFO, "Connected to server!");
-                ChangeScene(std::make_shared<GameplayScene>(this));
-                break;
-            case ENET_EVENT_TYPE_DISCONNECT:
-                network.isConnected = false;
-                TraceLog(LOG_INFO, "Disconnected from server.");
-                break;
-            case ENET_EVENT_TYPE_RECEIVE:
-                if (currentScene) {
-                    currentScene->OnPacketReceived(event.packet->data, event.packet->dataLength);
+        // --- Сетевой цикл ---
+        if (netClient) {
+            auto msgs = netClient->poll();
+
+            for (auto& msg : msgs) {
+                if (msg->type() == MessageType::CONNECT) {
+                    TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
+                    // Если мы не в игре, переходим
+                    if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+                        ChangeScene(std::make_shared<GameplayScene>(this));
+                    }
                 }
-                enet_packet_destroy(event.packet);
-                break;
+                else if (msg->type() == MessageType::DISCONNECT) {
+                    TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
+                    if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+                        ReturnToMenu();
+                    }
+                }
+                else if (msg->type() == MessageType::DATA) {
+                    // Передаем данные в текущую сцену через OnMessage
+                    if (currentScene) {
+                        currentScene->OnMessage(msg);
+                    }
+                }
             }
         }
+        // --------------------
 
         if (currentScene) {
             currentScene->Update(dt);
-
             BeginDrawing();
             ClearBackground(RAYWHITE);
-
             currentScene->Draw();
             currentScene->DrawGUI();
-
             EndDrawing();
         }
     }
@@ -259,18 +255,22 @@ void GameClient::Run() {
 // client\GameClient.h
 ﻿#pragma once
 #include "raygui_wrapper.h"
-#include "NetworkManager.h"
+#include "enet/ENetClient.h" 
 #include "../engine/Scenes/Scene.h"
 #include "../engine/ServerHost.h"
 #include "AudioManager.h"
 #include <memory>
+
+class Scene;
 
 class GameClient {
 public:
     int screenWidth = 1280;
     int screenHeight = 720;
 
-    NetworkManager network;
+    // Сетевой клиент
+    ENetClient::Shared netClient;
+
     std::unique_ptr<ServerHost> localServer;
     AudioManager audio;
 
@@ -284,17 +284,23 @@ public:
     void ChangeScene(std::shared_ptr<Scene> newScene);
     void ReturnToMenu();
 
-    void StartHost();
-    void StartHost(int port);
+    int StartHost(int port);
     void StopHost();
 
     int GetWidth() const { return GetScreenWidth(); }
     int GetHeight() const { return GetScreenHeight(); }
 };
 // client\main_client.cpp
-﻿#define RAYGUI_IMPLEMENTATION
+﻿// Определяем реализацию raygui ПЕРЕД включением заголовков
+#define RAYGUI_IMPLEMENTATION
+#include "raygui_wrapper.h" 
+
 #include "GameClient.h"
 #include "engine/Utils/ConfigManager.h"
+
+// Обязательно подключаем ENet для main функции
+#include <enet.h> 
+
 int* GetCompleteCodepoints(int* count) {
     static int completeChars[] = {
             0x0020, 0x0021, 0x0022, 0x0023, 0x0024, 0x0025, 0x0026, 0x0027, 0x0028, 0x0029,
@@ -321,152 +327,54 @@ int* GetCompleteCodepoints(int* count) {
     memcpy(result, completeChars, *count * sizeof(int));
     return result;
 }
+
 Font LoadFont() {
     int codepointCount = 0;
     int* completeCodepoints = GetCompleteCodepoints(&codepointCount);
-	Font mainFont;
+    Font mainFont;
 #ifdef ANDROID
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 #else
     mainFont = LoadFontEx("assets/fonts/Roboto-Regular.ttf", 24, completeCodepoints, codepointCount);
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
-
-#endif // ANDROID
+#endif 
+    GuiSetStyle(DEFAULT, TEXT_SIZE, 20); // GuiSetStyle теперь будет виден
     free(completeCodepoints);
-
-    GuiSetFont(mainFont);
-
-	return mainFont;
+    GuiSetFont(mainFont); // GuiSetFont теперь будет виден
+    return mainFont;
 }
+
 int main() {
-    GameClient game;
-    std::string configPath = "./";
+    // Инициализация ENet глобально
+    if (enet_initialize() != 0) {
+        return -1;
+    }
+    atexit(enet_deinitialize);
+
+    {
+        // Создаем игру в области видимости, чтобы деструктор вызвался до atexit
+        GameClient game;
+        std::string configPath = "./";
 
 #if defined(ANDROID) || defined(PLATFORM_ANDROID)
-
-    configPath = GetApplicationDirectory();
+        configPath = GetApplicationDirectory();
 #endif
 
-    ConfigManager::Initialize(configPath);
+        ConfigManager::Initialize(configPath);
 
+        auto f = LoadFont();
+        ConfigManager::SetFont(f);
+        GuiSetFont(f);
 
-    auto f = LoadFont();
-    ConfigManager::SetFont(f);
-    GuiSetFont(f);
+        SetTargetFPS(ConfigManager::GetClient().targetFPS);
+        if (ConfigManager::GetClient().fullscreen) {
+            ToggleFullscreen();
+        }
 
-    SetTargetFPS(ConfigManager::GetClient().targetFPS);
-    if (ConfigManager::GetClient().fullscreen) {
-        ToggleFullscreen();
-    }
+        game.Run();
+    } // Здесь вызовется деструктор GameClient
 
-    game.Run();
     return 0;
 }
-// client\NetworkManager.h
-﻿#pragma once
-#include <enet.h>
-#include <string>
-#include <iostream>
-#include <vector> // Исправлено: C2039
-#include "../common/NetworkPackets.h"
-#include "../engine/Utils/ConfigManager.h" // Исправлено: чтобы видеть ConfigManager
-
-class NetworkManager {
-public:
-    ENetHost* clientHost = nullptr;
-    ENetPeer* serverPeer = nullptr;
-    bool isConnected = false;
-
-    std::vector<LobbyInfo> lobbyList;
-    bool isWaitingForList = false;
-
-    // Метод ScanLAN и поле foundServers удалены, так как 
-    // используется Master Server подход (по требованию)
-
-    bool Init() {
-        if (enet_initialize() != 0) return false;
-        clientHost = enet_host_create(NULL, 1, 2, 0, 0);
-        return (clientHost != nullptr);
-    }
-
-    void RequestServerList() {
-        if (!Init()) return;
-
-        std::string ip = ConfigManager::GetClient().masterServerIp;
-        int port = ConfigManager::GetClient().masterServerPort;
-
-        Connect(ip, port);
-        isWaitingForList = true;
-    }
-
-    void Connect(const std::string& ip, int port) {
-        if (!clientHost) Init(); // Гарантируем инициализацию
-
-        ENetAddress address;
-        enet_address_set_host(&address, ip.c_str());
-        address.port = port;
-        serverPeer = enet_host_connect(clientHost, &address, 2, 0);
-    }
-
-    void Disconnect() {
-        if (serverPeer) {
-            enet_peer_disconnect(serverPeer, 0);
-            enet_host_flush(clientHost);
-            serverPeer = nullptr;
-        }
-        isConnected = false;
-    }
-
-    void Update() {
-        if (!clientHost) return;
-
-        ENetEvent event;
-        while (enet_host_service(clientHost, &event, 0) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT:
-                if (isWaitingForList) {
-                    // Как только подключились к мастеру - просим список
-                    MasterListRequestPacket req;
-                    req.type = PacketType::master_LIST_REQ;
-                    ENetPacket* p = enet_packet_create(&req, sizeof(req), ENET_PACKET_FLAG_RELIABLE);
-                    enet_peer_send(serverPeer, 0, p);
-                }
-                break;
-
-            case ENET_EVENT_TYPE_RECEIVE:
-                if (isWaitingForList) {
-                    PacketHeader* h = (PacketHeader*)event.packet->data;
-                    if (h->type == PacketType::master_LIST_RES) {
-                        MasterListResponsePacket* res = (MasterListResponsePacket*)event.packet->data;
-                        lobbyList.clear();
-
-                        LobbyInfo* infos = (LobbyInfo*)(event.packet->data + sizeof(MasterListResponsePacket));
-                        for (int i = 0; i < res->count; i++) {
-                            lobbyList.push_back(infos[i]);
-                        }
-
-                        Disconnect();
-                        isWaitingForList = false;
-                    }
-                    enet_packet_destroy(event.packet);
-                }
-                break;
-            }
-        }
-    }
-
-    void SendInput(const PlayerInputPacket& input) {
-        if (!isConnected || !serverPeer) return;
-        ENetPacket* packet = enet_packet_create(&input, sizeof(PlayerInputPacket), ENET_PACKET_FLAG_UNSEQUENCED);
-        enet_peer_send(serverPeer, 0, packet);
-    }
-
-    void Shutdown() {
-        if (clientHost) enet_host_destroy(clientHost);
-        enet_deinitialize();
-    }
-};
 // client\ParticleSystem.h
 ﻿#pragma once
 #include "raylib.h"
@@ -770,7 +678,8 @@ private:
 // client\scenes\GameplayScene.cpp
 ﻿#include "GameplayScene.h"
 #include "MainMenuScene.h"
-#include "../GameClient.h"
+#include "GameClient.h"
+
 GameplayScene::GameplayScene(GameClient* g) : Scene(g) {}
 
 void GameplayScene::Enter() {
@@ -781,38 +690,45 @@ void GameplayScene::Enter() {
     camera.offset = { w / 2, h / 2 };
 
     // Инициализация джойстиков
-    // Слева - Движение
     leftStick = std::make_unique<VirtualJoystick>(Vector2{ 150, h - 150 }, 40.0f, 90.0f);
-
-    // Справа - Стрельба (Красный)
     rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - 150, h - 150 }, 40.0f, 90.0f);
     rightStick->SetColors({ 60, 0, 0, 150 }, { 220, 50, 50, 200 });
 }
 
-
-
 void GameplayScene::Exit() {
-    game->network.Disconnect();
+    // Отключаемся при выходе
+    if (game->netClient) game->netClient->disconnect();
     game->StopHost();
     worldEntities.clear();
 }
 
-void GameplayScene::OnPacketReceived(const uint8_t* data, size_t size) {
-    PacketHeader* header = (PacketHeader*)data;
+void GameplayScene::OnMessage(Message::Shared msg) {
+    // Получаем поток данных
+    auto stream = msg->stream();
 
-    if (header->type == PacketType::server_INIT) {
-        InitPacket* init = (InitPacket*)data;
-        myPlayerId = init->yourPlayerId;
+    // Читаем тип пакета (первый байт)
+    uint8_t packetType = 0;
+    stream->read(packetType);
+
+    if (packetType == GamePacket::INIT) {
+        // Читаем InitData (просто ID)
+        stream->read(myPlayerId);
     }
-    else if (header->type == PacketType::server_SNAPSHOT) {
-        WorldSnapshotPacket* snap = (WorldSnapshotPacket*)data;
-        EntityState* states = (EntityState*)(data + sizeof(WorldSnapshotPacket));
+    else if (packetType == GamePacket::SNAPSHOT) {
+        // Читаем количество сущностей
+        uint32_t entityCount = 0;
+        stream->read(entityCount);
 
         std::vector<uint32_t> receivedIds;
-        for (uint32_t i = 0; i < snap->entityCount; i++) {
-            receivedIds.push_back(states[i].id);
-            worldEntities[states[i].id].PushState(states[i]);
+        for (uint32_t i = 0; i < entityCount; i++) {
+            EntityState st;
+            stream >> st; // Десериализация сущности (через оператор >> в NetworkPackets.h)
+
+            receivedIds.push_back(st.id);
+            worldEntities[st.id].PushState(st);
         }
+
+        // Удаляем устаревшие сущности
         for (auto it = worldEntities.begin(); it != worldEntities.end();) {
             bool found = false;
             for (uint32_t id : receivedIds) if (id == it->first) found = true;
@@ -828,7 +744,7 @@ void GameplayScene::Update(float dt) {
     rightStick->Update();
 
     PlayerInputPacket pkt;
-    pkt.type = PacketType::client_INPUT;
+    // pkt.type больше не нужно, тип пишется в stream отдельно
 
     // 2. Логика движения
     Vector2 moveDir = leftStick->GetAxis();
@@ -848,24 +764,27 @@ void GameplayScene::Update(float dt) {
     // 3. Логика стрельбы
     Vector2 aimDir = rightStick->GetAxis();
 
-    // Если джойстик отклонен
     if (Vector2Length(aimDir) > 0.2f) { // Deadzone
         pkt.isShooting = true;
-
         if (worldEntities.count(myPlayerId)) {
-            // Стреляем относительно игрока
             Vector2 playerPos = worldEntities[myPlayerId].renderPos;
             pkt.aimTarget = Vector2Add(playerPos, Vector2Scale(aimDir, 300.0f));
         }
     }
-    // Если джойстик не трогают - управление мышью
     else {
         pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
         pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
     }
 
-    // 4. Отправка и обновление
-    game->network.SendInput(pkt);
+    if (game->netClient && game->netClient->isConnected()) {
+        auto stream = StreamBuffer::alloc();
+
+        stream->write((uint8_t)GamePacket::INPUT);
+        stream << pkt;
+
+
+        game->netClient->send(DeliveryType::UNRELIABLE, stream);
+    }
 
     for (auto& [id, ent] : worldEntities) {
         ent.UpdateInterpolation();
@@ -894,8 +813,10 @@ void GameplayScene::Draw() {
             DrawLineEx(ent.renderPos, barrelEnd, 15, DARKGRAY);
 
             float hpPct = st.health / st.maxHealth;
-            DrawRectangle((int)ent.renderPos.x - 20, (int)ent.renderPos.y - 40, 40, 5, RED);
-            DrawRectangle((int)ent.renderPos.x - 20, (int)ent.renderPos.y - 40, (int)(40 * hpPct), 5, GREEN);
+            if (st.maxHealth > 0) {
+                DrawRectangle((int)ent.renderPos.x - 20, (int)ent.renderPos.y - 40, 40, 5, RED);
+                DrawRectangle((int)ent.renderPos.x - 20, (int)ent.renderPos.y - 40, (int)(40 * hpPct), 5, GREEN);
+            }
         }
         else if (st.type == EntityType::BULLET) {
             DrawCircleV(ent.renderPos, st.radius, RED);
@@ -906,17 +827,21 @@ void GameplayScene::Draw() {
 
 void GameplayScene::DrawGUI() {
     DrawFPS(10, 10);
-    if (!game->network.isConnected) {
+
+    if (game->netClient && !game->netClient->isConnected()) {
         DrawText("Connecting to server...", game->GetWidth() / 2 - 100, 20, 20, RED);
     }
+
     leftStick->Draw();
     rightStick->Draw();
+
     if (GuiButton(Rectangle{ (float)game->GetWidth() - 100, 10, 90, 30 }, "DISCONNECT")) {
-        game->ChangeScene(std::make_shared<MainMenuScene>(game));
+        game->ReturnToMenu();
     }
 }
 // client\scenes\GameplayScene.h
 ﻿#pragma once
+#include "external/fix_win32_compatibility.h"
 #include "../../engine/Scenes/Scene.h"
 #include "../../common/NetworkPackets.h"
 #include "../ParticleSystem.h"
@@ -925,14 +850,15 @@ void GameplayScene::DrawGUI() {
 #include <map>
 #include <vector>
 #include <memory>
+
 class GameClient;
+
 struct InterpolatedEntity {
     EntityState current;
     EntityState previous;
     float lastUpdateTime;
     Vector2 renderPos;
     float renderRot;
-
 
     InterpolatedEntity() : lastUpdateTime(0), renderRot(0) {}
 
@@ -961,217 +887,165 @@ class GameplayScene : public Scene {
     std::unique_ptr<VirtualJoystick> leftStick;
     std::unique_ptr<VirtualJoystick> rightStick;
 
-
 public:
     GameplayScene(GameClient* g);
     virtual ~GameplayScene() = default;
 
     void Enter() override;
     void Exit() override;
-    void OnPacketReceived(const uint8_t* data, size_t size) override;
+
+    void OnMessage(Message::Shared msg) override;
+
     void Update(float dt) override;
     void Draw() override;
     void DrawGUI() override;
 };
 // client\scenes\MainMenuScene.cpp
-﻿#define _CRT_SECURE_NO_WARNINGS // Исправлено: для strcpy/sprintf
+﻿#define _CRT_SECURE_NO_WARNINGS
 #include "MainMenuScene.h"
-#include "raygui.h"
-#include "GameClient.h"
+#include "raygui_wrapper.h"
+#include "../GameClient.h"
 #include "engine/Utils/ConfigManager.h"
 #include <cstring>
 #include <string>
+#include <thread>
+#include <chrono>
 
-enum MenuState { MAIN, MULTIPLAYER, SETTINGS };
-static MenuState currentMenuState = MAIN;
-static int mpTab = 0; // 0=Internet, 1=LAN (Disabled), 2=Direct/Favorites
-static int selectedServerIndex = -1;
-static std::string statusMessage = "";
+enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
+static MenuState currentState = STATE_MAIN;
+
+static int mpTab = 0;
+static char ipBuffer[64] = "";
+static char portBuffer[16] = "";
+static char nameBuffer[32] = "";
+static bool editIp = false;
+static bool editPort = false;
+static bool editName = false;
 
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
 
 void MainMenuScene::Enter() {
     ClientConfig& cfg = ConfigManager::GetClient();
-    ServerConfig& sCfg = ConfigManager::GetServer();
-
     strcpy(ipBuffer, cfg.lastIp.c_str());
-    sprintf(portBuffer, "%d", cfg.lastPort > 0 ? cfg.lastPort : sCfg.port);
+    sprintf(portBuffer, "%d", cfg.lastPort);
     strcpy(nameBuffer, cfg.playerName.c_str());
-    statusMessage = "";
-    selectedServerIndex = -1;
+    currentState = STATE_MAIN;
 }
 
 void MainMenuScene::Draw() {
     ClearBackground(GetColor(0x181818FF));
     int w = GetScreenWidth();
     int h = GetScreenHeight();
+    float cx = w / 2.0f;
 
-    const char* title = ConfigManager::Text("title_void_assault");
-    DrawText(title, w / 2 - MeasureText(title, 60) / 2, 40, 60, WHITE);
+    const char* title = "VOID ASSAULT";
+    DrawText(title, cx - MeasureText(title, 60) / 2, 50, 60, WHITE);
 
-    if (currentMenuState == MAIN) {
-        float btnW = 300; float btnH = 50; float startY = 180; float spacing = 65;
+    if (currentState == STATE_MAIN) {
+        float startY = 200;
+        float btnW = 300; float btnH = 50; float spacing = 70;
 
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
-            game->StartHost(7777);
-            if (game->localServer) {
-                game->network.Connect("127.0.0.1", 7777);
-            }
-            else {
-                statusMessage = "Error: Port 7777 is busy!";
-            }
+        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
+            //std::thread([this]() {
+                int realPort = game->StartHost(7777);
+                if (realPort > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    game->netClient->connect("127.0.0.1", realPort);
+                }
+                //}).detach();
         }
 
-        // --- MULTIPLAYER ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
-            currentMenuState = MULTIPLAYER;
+        if (GuiButton({ cx - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
+            currentState = STATE_MULTIPLAYER;
         }
 
-        // --- SETTINGS ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
-            currentMenuState = SETTINGS;
+        if (GuiButton({ cx - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
+            currentState = STATE_SETTINGS;
         }
 
-        // --- EXIT ---
-        if (GuiButton({ (float)w / 2 - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
+        if (GuiButton({ cx - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
             CloseWindow();
         }
-
-        if (!statusMessage.empty()) {
-            DrawText(statusMessage.c_str(), w / 2 - MeasureText(statusMessage.c_str(), 20) / 2, h - 50, 20, RED);
-        }
     }
-    else if (currentMenuState == MULTIPLAYER) {
-
-        GuiGroupBox({ (float)w / 2 - 250, 100, 500, 60 }, ConfigManager::Text("lbl_player_setup"));
-        GuiLabel({ (float)w / 2 - 230, 120, 80, 30 }, "Nickname:");
-        if (GuiTextBox({ (float)w / 2 - 150, 120, 300, 30 }, nameBuffer, 32, isEditingName)) {
-            isEditingName = !isEditingName;
-            ConfigManager::GetClient().playerName = std::string(nameBuffer);
+    else if (currentState == STATE_MULTIPLAYER) {
+        GuiLabel({ cx - 150, 130, 300, 20 }, "Nickname:");
+        if (GuiTextBox({ cx - 150, 150, 300, 30 }, nameBuffer, 32, editName)) {
+            editName = !editName;
+            ConfigManager::GetClient().playerName = nameBuffer;
             ConfigManager::Save();
         }
 
-        GuiToggleGroup({ (float)w / 2 - 300, 180, 200, 40 }, "ONLINE;LAN (Disabled);DIRECT / HOST", &mpTab);
+        GuiToggleGroup({ cx - 200, 210, 200, 40 }, "JOIN GAME;HOST GAME", &mpTab);
 
-        float listX = (float)w / 2 - 300;
-        float listY = 240;
-        float listW = 600;
-        float listH = 300;
+        float panelY = 270;
+        GuiGroupBox({ cx - 250, panelY, 500, 300 }, mpTab == 0 ? "Join Server" : "Create Server");
 
-        GuiGroupBox({ listX, listY, listW, listH }, "Server List");
+        if (mpTab == 0) {
+            float inY = panelY + 40;
+            GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
+            if (GuiTextBox({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp)) editIp = !editIp;
 
-        if (mpTab == 0) { // ONLINE LIST
-            float startY = 280;
+            GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
+            if (GuiTextBox({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
 
-            // Кнопка Refresh
-            if (GuiButton({ (float)w / 2 + 150, startY - 40, 100, 30 }, "REFRESH")) {
-                game->network.RequestServerList();
-            }
-
-            // Статус
-            if (game->network.isWaitingForList) {
-                GuiLabel({ (float)w / 2 - 50, startY, 200, 30 }, "Fetching list...");
-            }
-            else if (game->network.lobbyList.empty()) {
-                GuiLabel({ (float)w / 2 - 80, startY, 200, 30 }, "No servers found.");
-            }
-            else {
-                int yOffset = 0;
-                for (const auto& lobby : game->network.lobbyList) {
-                    std::string text = std::string(lobby.name) + " | Map: " + lobby.mapName +
-                        " | " + std::to_string(lobby.players) + "/" + std::to_string(lobby.maxPlayers);
-
-                    if (GuiButton({ (float)w / 2 - 200, startY + (float)yOffset, 300, 30 }, text.c_str())) {
-                        std::string ip = lobby.ip;
-                        int port = lobby.port;
-                        game->network.Connect(ip, port);
-                    }
-                    yOffset += 40;
-                }
-            }
-        }
-        else if (mpTab == 1) {
-            // LAN (Убрано из кода по запросу, заглушка)
-            GuiLabel({ listX + 20, listY + 40, 300, 30 }, "LAN Scanning disabled.");
-        }
-        else if (mpTab == 2) { // DIRECT / FAVORITES
-            float subY = listY + 20;
-
-            GuiLabel({ listX + 20, subY, 200, 30 }, "--- CREATE LOBBY ---");
-            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "Port:");
-            if (GuiTextBox({ listX + 70, subY + 40, 80, 30 }, portBuffer, 6, isEditingPort)) isEditingPort = !isEditingPort;
-
-            if (GuiButton({ listX + 170, subY + 40, 150, 30 }, "HOST SERVER")) {
-                int port = atoi(portBuffer);
-                ConfigManager::GetServer().port = port;
+            if (GuiButton({ cx - 100, inY + 60, 200, 40 }, "CONNECT")) {
+                ConfigManager::GetClient().lastIp = ipBuffer;
+                ConfigManager::GetClient().lastPort = atoi(portBuffer);
                 ConfigManager::Save();
-                game->StartHost(port);
-                if (game->localServer) {
-                    game->network.Connect("127.0.0.1", port);
-                }
-                else {
-                    statusMessage = "Failed to bind port (Already in use?)";
-                }
+                game->netClient->connect(ipBuffer, atoi(portBuffer));
             }
 
-            subY += 100;
-            DrawLine((int)listX, (int)subY, (int)(listX + listW), (int)subY, GRAY);
-            subY += 20;
-
-            GuiLabel({ listX + 20, subY, 200, 30 }, "--- DIRECT CONNECT ---");
-            GuiLabel({ listX + 20, subY + 40, 50, 30 }, "IP:");
-            if (GuiTextBox({ listX + 70, subY + 40, 200, 30 }, ipBuffer, 64, isEditingIp)) isEditingIp = !isEditingIp;
-
-            if (GuiButton({ listX + 280, subY + 40, 120, 30 }, "ADD FAVORITE")) {
-                SavedServer sv;
-                sv.ip = std::string(ipBuffer);
-                sv.port = atoi(portBuffer);
-                sv.name = "Custom Server";
-                ConfigManager::GetClient().favoriteServers.push_back(sv);
-                ConfigManager::Save();
-            }
-
-            if (GuiButton({ listX + 410, subY + 40, 150, 30 }, "CONNECT")) {
-                int port = atoi(portBuffer);
-                game->network.Connect(ipBuffer, port);
-            }
-
-            subY += 80;
-            GuiLabel({ listX + 20, subY, 200, 20 }, "Favorites:");
+            GuiLabel({ cx - 200, inY + 120, 200, 20 }, "Favorites:");
             auto& favs = ConfigManager::GetClient().favoriteServers;
-            for (int i = 0; i < favs.size() && i < 3; i++) {
-                std::string label = favs[i].ip + ":" + std::to_string(favs[i].port);
-                if (GuiButton({ listX + 20, subY + 25 + (i * 35.0f), 300, 30 }, label.c_str())) {
-                    strcpy(ipBuffer, favs[i].ip.c_str());
-                    sprintf(portBuffer, "%d", favs[i].port);
-                    game->network.Connect(favs[i].ip, favs[i].port);
+            for (size_t i = 0; i < favs.size() && i < 3; i++) {
+                std::string label = favs[i].name + " (" + favs[i].ip + ")";
+                if (GuiButton({ cx - 200, inY + 145 + (i * 35.0f), 400, 30 }, label.c_str())) {
+                    game->netClient->connect(favs[i].ip, favs[i].port);
                 }
             }
         }
-        if (GuiButton({ 20, 20, 100, 40 }, ConfigManager::Text("btn_back"))) {
-            currentMenuState = MAIN;
-            statusMessage = "";
+        else {
+            float inY = panelY + 80;
+            GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
+            if (GuiTextBox({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
+
+            if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
+                int port = atoi(portBuffer);
+
+                int p = game->StartHost(port);
+                if (p > 0) {
+                    //std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+                    game->netClient->connect("127.0.0.1", p);
+                }
+            }
         }
 
-        if (!statusMessage.empty()) {
-            DrawText(statusMessage.c_str(), listX, listY + listH + 70, 20, RED);
+        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
+            currentState = STATE_MAIN;
         }
     }
-    else if (currentMenuState == SETTINGS) {
-        if (GuiButton({ (float)w / 2 - 100, 200, 200, 40 }, "Language: RU / EN")) {
-            ClientConfig& cfg = ConfigManager::GetClient();
-            cfg.language = (cfg.language == "ru") ? "en" : "ru";
-            ConfigManager::LoadLanguage(cfg.language);
-            ConfigManager::Save();
+    else if (currentState == STATE_SETTINGS) {
+        float startY = 200;
+        GuiLabel({ cx - 150, startY, 300, 20 }, "Master Volume");
+        float vol = game->audio.GetVolume();
+        if (GuiSlider({ cx - 150, startY + 25, 300, 30 }, "0", "1", &vol, 0, 1)) {
+            game->audio.SetVolume(vol);
         }
 
-        if (GuiButton({ 20, 20, 100, 40 }, ConfigManager::Text("btn_back"))) {
-            currentMenuState = MAIN;
+        startY += 80;
+        if (GuiButton({ cx - 150, startY, 300, 40 }, "Toggle Fullscreen")) {
+            ToggleFullscreen();
+        }
+
+        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
+            currentState = STATE_MAIN;
         }
     }
 }
 // client\scenes\MainMenuScene.h
 ﻿#pragma once
+#include "external/fix_win32_compatibility.h"
 #include "../../engine/Scenes/Scene.h"
 
 class GameClient;
@@ -1245,51 +1119,91 @@ public:
     }
 };
 // common\CMakeLists.txt
-﻿add_library(GameCommon SHARED
-    NetworkPackets.h Common.cpp
-)
+﻿file(GLOB COMMON_SOURCES "*.cpp" "net/*.cpp" "serial/*.cpp" "enet/*.cpp" "time/*.cpp")
+
+add_library(GameCommon SHARED ${COMMON_SOURCES})
 
 target_link_libraries(GameCommon PUBLIC enet::enet_shared raylib)
 target_include_directories(GameCommon PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameCommon PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 // common\Common.cpp
-
-// common\NetworkPackets.h
+﻿#include "external/fix_win32_compatibility.h"
+// common\Common.h
 ﻿#pragma once
-#if defined(_WIN32)
-#include "fix_win32_compatibility.h"
-#endif
-#include <cstdint>
+#include "external/fix_win32_compatibility.h"
+#include <ctime>
+#include <string>
+#include <sstream>
 #include "raylib.h"
 
-enum class PacketType : uint8_t {
-    client_CONNECT,
-    client_INPUT,
-    client_PING,
-    client_DISCOVERY_REQ,
+/**
+ * Precision explicit typedefs
+ */
+typedef float float32_t;
+typedef double float64_t;
 
-    server_INIT,
-    server_SNAPSHOT,
-    server_EVENT,
-    server_PONG, // Добавлено для PING/PONG
+/**
+ * Fixed width integer types
+ */
+#include <cstdint>
 
-    master_REGISTER,
-    master_HEARTBEAT,
-    master_LIST_REQ,
-    master_LIST_RES
-};
+ /**
+  * Define PI
+  */
+#ifndef M_PI
+#define M_PI 3.14159265358979f
+#endif
 
-struct PacketHeader {
-    PacketType type;
-};
+  /**
+   * Define EPSILON
+   */
+#ifndef M_EPSILON
+#define M_EPSILON 0.000001f
+#endif
 
-struct PlayerInputPacket : PacketHeader {
+
+
+#define LOG_INFO(stream_input)  do { std::ostringstream s; s << stream_input; TraceLog(3, "[NET] %s", s.str().c_str()); } while(0)
+#define LOG_WARN(stream_input)  do { std::ostringstream s; s << stream_input; TraceLog(4, "[NET WARN] %s", s.str().c_str()); } while(0)
+#define LOG_ERROR(stream_input) do { std::ostringstream s; s << stream_input; TraceLog(5, "[NET ERROR] %s", s.str().c_str()); } while(0)
+#define LOG_DEBUG(stream_input) do { std::ostringstream s; s << stream_input; TraceLog(2, "[NET DEBUG] %s", s.str().c_str()); } while(0)
+
+// ------------------------------------------
+
+/**
+ * Utility lookup for const map types.
+ */
+template <typename T>
+typename T::mapped_type get(T const& map, typename T::key_type const& key)
+{
+    typename T::const_iterator iter(map.find(key));
+    return iter != map.end() ? iter->second : typename T::mapped_type();
+}
+// common\NetworkPackets.h
+﻿#pragma once
+#include "raylib.h"
+#include <cstdint>
+#include <vector>
+
+#include "serial/StreamBuffer.h" 
+
+namespace GamePacket {
+    enum Type : uint8_t {
+        INPUT = 1,
+        INIT,
+        SNAPSHOT,
+        EVENT
+    };
+}
+
+enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY };
+
+
+struct PlayerInputPacket {
     Vector2 movement;
     Vector2 aimTarget;
     bool isShooting;
 };
-
-enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY };
 
 struct EntityState {
     uint32_t id;
@@ -1302,60 +1216,1585 @@ struct EntityState {
     Color color;
 };
 
-struct WorldSnapshotPacket : PacketHeader {
-    uint32_t entityCount;
+
+inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const Vector2& v) {
+    stream->write(v.x);
+    stream->write(v.y);
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, Vector2& v) {
+    stream->read(v.x);
+    stream->read(v.y);
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const Color& c) {
+    stream->write(c.r);
+    stream->write(c.g);
+    stream->write(c.b);
+    stream->write(c.a);
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, Color& c) {
+    stream->read(c.r);
+    stream->read(c.g);
+    stream->read(c.b);
+    stream->read(c.a);
+    return stream;
+}
+
+
+inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const PlayerInputPacket& p) {
+    stream->write(p.movement);
+    stream->write(p.aimTarget);
+    stream->write(p.isShooting);
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, PlayerInputPacket& p) {
+    stream->read(p.movement);
+    stream->read(p.aimTarget);
+    stream->read(p.isShooting);
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const EntityState& e) {
+    stream->write(e.id);
+    stream->write(e.position);
+    stream->write(e.rotation);
+    stream->write(e.health);
+    stream->write(e.maxHealth);
+    stream->write((uint8_t)e.type);
+    stream->write(e.radius);
+    stream << e.color;
+    return stream;
+}
+
+inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, EntityState& e) {
+    stream->read(e.id);
+    stream->read(e.position);
+    stream->read(e.rotation);
+    stream->read(e.health);
+    stream->read(e.maxHealth);
+    uint8_t t; stream->read(t); e.type = (EntityType)t;
+    stream->read(e.radius);
+    stream >> e.color;
+    return stream;
+}
+// common\enet\ENetClient.cpp
+﻿#include "enet/ENetClient.h"
+
+#include "Common.h"
+#include "time/Time.h"
+
+const uint8_t SERVER_ID = 0;
+const std::time_t TIMEOUT_MS = 5000;
+const std::time_t REQUEST_INTERVAL = Time::fromSeconds(1.0 / 60.0);
+const uint8_t RELIABLE_CHANNEL = 0;
+const uint8_t UNRELIABLE_CHANNEL = 1;
+const uint8_t NUM_CHANNELS = 2;
+
+ENetClient::Shared ENetClient::alloc()
+{
+    return std::make_shared<ENetClient>();
+}
+
+ENetClient::ENetClient()
+    : host_(nullptr)
+    , server_(nullptr)
+    , currentMsgId_(0)
+{
+    // Пытаемся создать хост. Если ENet еще не инициализирован (в main), host_ останется nullptr.
+    // Это нормально, мы проверим это в connect() или poll().
+    host_ = enet_host_create(nullptr, 1, NUM_CHANNELS, 0, 0);
+    if (!host_) {
+        LOG_ERROR("Client host creation failed (ENet might not be initialized yet)");
+    }
+}
+
+ENetClient::~ENetClient()
+{
+    disconnect();
+    if (host_) {
+        enet_host_destroy(host_);
+        host_ = nullptr;
+    }
+}
+
+bool ENetClient::connect(const std::string& host, uint32_t port)
+{
+    if (!host_) {
+        host_ = enet_host_create(nullptr, 1, NUM_CHANNELS, 0, 0);
+        if (!host_) {
+            LOG_ERROR("FATAL: Cannot connect. Failed to create ENet client host.");
+            return false;
+        }
+    }
+
+    if (isConnected()) {
+        return true;
+    }
+
+    ENetAddress address;
+    enet_address_set_host(&address, host.c_str());
+    address.port = port;
+
+    server_ = enet_host_connect(host_, &address, NUM_CHANNELS, 0);
+    if (server_ == nullptr) {
+        LOG_ERROR("No available peers for initiating an ENet connection");
+        return false;
+    }
+
+    ENetEvent event;
+    // Безопасный вызов сервиса
+    if (enet_host_service(host_, &event, TIMEOUT_MS) > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
+        LOG_DEBUG("Connection to `" << host << ":" << port << "` succeeded");
+        return true;
+    }
+
+    LOG_ERROR("Connection to `" << host << ":" << port << "` failed");
+    enet_peer_reset(server_);
+    server_ = nullptr;
+    return false;
+}
+
+bool ENetClient::disconnect()
+{
+    // ЗАЩИТА ОТ КРАША
+    if (!host_ || !server_) return false;
+
+    if (!isConnected()) return false;
+
+    LOG_DEBUG("Disconnecting from server...");
+    enet_peer_disconnect(server_, 0);
+
+    ENetEvent event;
+    auto timestamp = Time::timestamp();
+    bool success = false;
+
+    while (true) {
+        int32_t res = enet_host_service(host_, &event, 0);
+        if (res > 0) {
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+                enet_packet_destroy(event.packet);
+            }
+            else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+                success = true;
+                break;
+            }
+        }
+        else if (res < 0) {
+            break;
+        }
+
+        if (Time::timestamp() - timestamp > Time::fromMilliseconds(TIMEOUT_MS)) break;
+    }
+
+    if (!success) {
+        enet_peer_reset(server_);
+    }
+    server_ = nullptr;
+    return !success;
+}
+
+bool ENetClient::isConnected() const
+{
+    // ЗАЩИТА ОТ КРАША
+    return host_ != nullptr && server_ != nullptr && server_->state == ENET_PEER_STATE_CONNECTED;
+}
+
+void ENetClient::on(uint32_t id, RequestHandler handler)
+{
+    handlers_[id] = handler;
+}
+
+void ENetClient::handleRequest(uint32_t requestId, StreamBuffer::Shared stream) const
+{
+    auto iter = handlers_.find(requestId);
+    if (iter != handlers_.end()) {
+        auto handler = iter->second;
+        auto res = handler(SERVER_ID, stream);
+        sendResponse(requestId, res);
+    }
+}
+
+void ENetClient::sendResponse(uint32_t requestId, StreamBuffer::Shared stream) const
+{
+    if (!isConnected()) return;
+    auto msg = Message::alloc(++currentMsgId_, requestId, MessageType::DATA_RESPONSE, stream);
+    sendMessage(DeliveryType::RELIABLE, msg);
+}
+
+void ENetClient::sendMessage(DeliveryType type, Message::Shared msg) const
+{
+    // ЗАЩИТА ОТ КРАША
+    if (!host_ || !server_) return;
+
+    uint32_t channel = (type == DeliveryType::RELIABLE) ? RELIABLE_CHANNEL : UNRELIABLE_CHANNEL;
+    uint32_t flags = (type == DeliveryType::RELIABLE) ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED;
+
+    auto data = msg->serialize();
+    ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
+
+    enet_peer_send(server_, channel, p);
+    enet_host_flush(host_);
+}
+
+void ENetClient::send(DeliveryType type, StreamBuffer::Shared stream) const
+{
+    if (!isConnected()) return;
+    auto msg = Message::alloc(++currentMsgId_, MessageType::DATA, stream);
+    sendMessage(type, msg);
+}
+
+void ENetClient::sendRequest(uint32_t requestId, StreamBuffer::Shared stream) const
+{
+    auto msg = Message::alloc(++currentMsgId_, requestId, MessageType::DATA_REQUEST, stream);
+    sendMessage(DeliveryType::RELIABLE, msg);
+}
+
+Message::Shared ENetClient::request(uint32_t requestId, StreamBuffer::Shared stream)
+{
+    if (!isConnected()) return nullptr;
+    sendRequest(requestId, stream);
+
+    auto timestamp = Time::timestamp();
+    while (true) {
+        auto msgs = poll();
+        for (auto msg : msgs) {
+            if (msg->type() == MessageType::DATA_RESPONSE && msg->requestId() == requestId) {
+                return msg;
+            }
+            queue_.push_back(msg);
+        }
+        if (Time::timestamp() - timestamp > Time::fromMilliseconds(TIMEOUT_MS)) break;
+        Time::sleep(REQUEST_INTERVAL);
+    }
+    return nullptr;
+}
+
+std::vector<Message::Shared> ENetClient::poll()
+{
+    std::vector<Message::Shared> msgs;
+
+    if (!host_) return msgs;
+
+    ENetEvent event;
+    while (true) {
+        int32_t res = enet_host_service(host_, &event, 0);
+        if (res > 0) {
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+                auto stream = StreamBuffer::alloc(event.packet->data, event.packet->dataLength);
+                auto msg = Message::alloc(SERVER_ID);
+                msg->deserialize(stream);
+                msgs.push_back(msg);
+
+                if (msg->type() == MessageType::DATA_REQUEST) {
+                    handleRequest(msg->requestId(), msg->stream());
+                }
+                enet_packet_destroy(event.packet);
+
+            }
+            else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+                auto msg = Message::alloc(SERVER_ID, MessageType::DISCONNECT);
+                msgs.push_back(msg);
+                server_ = nullptr;
+            }
+        }
+        else {
+            break;
+        }
+    }
+    if (!queue_.empty()) {
+        msgs.insert(msgs.end(), queue_.begin(), queue_.end());
+        queue_.clear();
+    }
+    return msgs;
+}
+// common\enet\ENetClient.h
+﻿#pragma once
+
+#include "net/Client.h"
+#include "net/DeliveryType.h"
+#include "net/Message.h"
+
+#include <enet.h>
+
+#include <iostream>
+#include <map>
+#include <memory>
+#include <vector>
+
+class ENetClient : public Client {
+
+public:
+    typedef std::shared_ptr<ENetClient> Shared;
+    static Shared alloc();
+
+    ENetClient();
+    ~ENetClient();
+
+    bool connect(const std::string&, uint32_t);
+    bool disconnect();
+    bool isConnected() const;
+
+    void send(DeliveryType, StreamBuffer::Shared) const;
+    Message::Shared request(uint32_t, StreamBuffer::Shared);
+    std::vector<Message::Shared> poll();
+
+    void on(uint32_t, RequestHandler);
+
+private:
+    void sendMessage(DeliveryType type, Message::Shared msg) const;
+    void sendRequest(uint32_t responseId, StreamBuffer::Shared stream) const;
+    void sendResponse(uint32_t requestId, StreamBuffer::Shared stream) const;
+    void handleRequest(uint32_t, StreamBuffer::Shared stream) const;
+
+    // prevent copy-construction
+    ENetClient(const ENetClient&);
+    // prevent assignment
+    ENetClient& operator=(const ENetClient&);
+
+    ENetHost* host_;
+    ENetPeer* server_;
+    std::vector<Message::Shared> queue_;
+    std::map<uint32_t, RequestHandler> handlers_;
+    mutable uint32_t currentMsgId_;
 };
 
-struct InitPacket : PacketHeader {
-    uint32_t yourPlayerId;
+// common\enet\ENetServer.cpp
+﻿#include "enet/ENetServer.h"
+
+#include "Common.h"
+#include "time/Time.h"
+
+const uint32_t MAX_CONNECTIONS = 64;
+const std::time_t TIMEOUT_MS = 5000;
+const uint8_t RELIABLE_CHANNEL = 0;
+const uint8_t UNRELIABLE_CHANNEL = 1;
+const uint8_t NUM_CHANNELS = 2;
+
+std::string addressToString(const ENetAddress* address)
+{
+    char ip_address_str[256];
+    enet_address_get_host_ip(address, ip_address_str, sizeof(ip_address_str));
+    return std::string(ip_address_str) + ":" + std::to_string(address->port);
+}
+
+ENetServer::Shared ENetServer::alloc()
+{
+    return std::make_shared<ENetServer>();
+}
+
+ENetServer::ENetServer()
+    : host_(nullptr)
+    , currentMsgId_(0)
+{
+}
+
+ENetServer::~ENetServer()
+{
+    stop();
+}
+
+bool ENetServer::start(uint32_t port)
+{
+    if (host_) return true;
+
+    ENetAddress address;
+    address.host = ENET_HOST_ANY;
+    address.port = port;
+    enet_address_set_host(&address, "localhost");
+    host_ = enet_host_create(&address, MAX_CONNECTIONS, NUM_CHANNELS, 0, 0);
+
+    if (host_ == nullptr) {
+        LOG_ERROR("Failed to create ENet server host (Port might be busy)");
+        return false;
+    }
+    return true;
+}
+
+bool ENetServer::stop()
+{
+    // ЗАЩИТА ОТ КРАША
+    if (!host_) return false;
+
+    if (!isRunning()) return false;
+
+    for (auto iter : clients_) {
+        enet_peer_disconnect(iter.second, 0);
+    }
+
+    auto timestamp = Time::timestamp();
+    bool success = false;
+    ENetEvent event;
+
+    while (true) {
+        int32_t res = enet_host_service(host_, &event, 0);
+        if (res > 0) {
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+                enet_packet_destroy(event.packet);
+            }
+            else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+                clients_.erase(event.peer->incomingPeerID);
+            }
+            else if (event.type == ENET_EVENT_TYPE_CONNECT) {
+                enet_peer_disconnect(event.peer, 0);
+            }
+        }
+        else if (res < 0) {
+            break;
+        }
+        else {
+            if (clients_.empty()) {
+                success = true;
+                break;
+            }
+        }
+        if (Time::timestamp() - timestamp > Time::fromMilliseconds(TIMEOUT_MS)) break;
+    }
+
+    for (auto iter : clients_) {
+        enet_peer_reset(iter.second);
+    }
+    clients_.clear();
+
+    enet_host_destroy(host_);
+    host_ = nullptr;
+    return !success;
+}
+
+bool ENetServer::isRunning() const
+{
+    return host_ != nullptr;
+}
+
+uint32_t ENetServer::numClients() const
+{
+    if (!host_) return 0;
+    return host_->connectedPeers;
+}
+
+void ENetServer::on(uint32_t id, RequestHandler handler)
+{
+    handlers_[id] = handler;
+}
+
+void ENetServer::handleRequest(uint32_t id, uint32_t requestId, StreamBuffer::Shared stream) const
+{
+    auto iter = handlers_.find(requestId);
+    if (iter != handlers_.end()) {
+        auto handler = iter->second;
+        auto res = handler(id, stream);
+        sendResponse(id, requestId, res);
+    }
+}
+
+ENetPeer* ENetServer::getClient(uint32_t id) const
+{
+    auto iter = clients_.find(id);
+    if (iter == clients_.end()) return nullptr;
+    return iter->second;
+}
+
+void ENetServer::sendResponse(uint32_t id, uint32_t requestId, StreamBuffer::Shared stream) const
+{
+    if (!host_) return;
+    auto client = getClient(id);
+    if (!client) return;
+
+    auto msg = Message::alloc(++currentMsgId_, requestId, MessageType::DATA_RESPONSE, stream);
+    sendMessage(id, DeliveryType::RELIABLE, msg);
+}
+
+void ENetServer::sendMessage(uint32_t id, DeliveryType type, Message::Shared msg) const
+{
+    if (!host_) return;
+    auto client = getClient(id);
+    if (!client) return;
+
+    uint32_t channel = (type == DeliveryType::RELIABLE) ? RELIABLE_CHANNEL : UNRELIABLE_CHANNEL;
+    uint32_t flags = (type == DeliveryType::RELIABLE) ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED;
+
+    auto data = msg->serialize();
+    ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
+
+    enet_peer_send(client, channel, p);
+    enet_host_flush(host_);
+}
+
+void ENetServer::send(uint32_t id, DeliveryType type, StreamBuffer::Shared stream) const
+{
+    auto msg = Message::alloc(++currentMsgId_, MessageType::DATA, stream);
+    sendMessage(id, type, msg);
+}
+
+void ENetServer::broadcastMessage(DeliveryType type, Message::Shared msg) const
+{
+    if (!host_) return;
+    if (numClients() == 0) return;
+
+    uint32_t channel = (type == DeliveryType::RELIABLE) ? RELIABLE_CHANNEL : UNRELIABLE_CHANNEL;
+    uint32_t flags = (type == DeliveryType::RELIABLE) ? ENET_PACKET_FLAG_RELIABLE : ENET_PACKET_FLAG_UNSEQUENCED;
+
+    auto data = msg->serialize();
+    ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
+
+    enet_host_broadcast(host_, channel, p);
+    enet_host_flush(host_);
+}
+
+void ENetServer::broadcast(DeliveryType type, StreamBuffer::Shared stream) const
+{
+    auto msg = Message::alloc(++currentMsgId_, MessageType::DATA, stream);
+    broadcastMessage(type, msg);
+}
+
+std::vector<Message::Shared> ENetServer::poll()
+{
+    std::vector<Message::Shared> msgs;
+    if (!host_) return msgs;
+
+    ENetEvent event;
+    while (true) {
+        int32_t res = enet_host_service(host_, &event, 0);
+        if (res > 0) {
+            if (event.type == ENET_EVENT_TYPE_RECEIVE) {
+                auto stream = StreamBuffer::alloc(event.packet->data, event.packet->dataLength);
+                auto msg = Message::alloc(event.peer->incomingPeerID);
+                msg->deserialize(stream);
+                msgs.push_back(msg);
+
+                if (msg->type() == MessageType::DATA_REQUEST) {
+                    handleRequest(event.peer->incomingPeerID, msg->requestId(), msg->stream());
+                }
+                enet_packet_destroy(event.packet);
+
+            }
+            else if (event.type == ENET_EVENT_TYPE_CONNECT) {
+                auto msg = Message::alloc(event.peer->incomingPeerID, MessageType::CONNECT);
+                msgs.push_back(msg);
+                clients_[event.peer->incomingPeerID] = event.peer;
+
+            }
+            else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
+                auto msg = Message::alloc(event.peer->incomingPeerID, MessageType::DISCONNECT);
+                msgs.push_back(msg);
+                clients_.erase(event.peer->incomingPeerID);
+            }
+        }
+        else {
+            break;
+        }
+    }
+    return msgs;
+}
+// common\enet\ENetServer.h
+﻿#pragma once
+#include "fix_win32_compatibility.h"
+#include "net/DeliveryType.h"
+#include "net/Message.h"
+#include "net/Server.h"
+
+#include <enet.h>
+
+#include <iostream>
+#include <map>
+#include <memory>
+#include <vector>
+
+class ENetServer : public Server {
+
+public:
+    typedef std::shared_ptr<ENetServer> Shared;
+    static Shared alloc();
+
+    ENetServer();
+    ~ENetServer();
+
+    bool start(uint32_t);
+    bool stop();
+    bool isRunning() const;
+
+    uint32_t numClients() const;
+
+    void send(uint32_t, DeliveryType, StreamBuffer::Shared) const;
+    void broadcast(DeliveryType, StreamBuffer::Shared) const;
+    std::vector<Message::Shared> poll();
+
+    void on(uint32_t, RequestHandler);
+
+private:
+    ENetPeer* getClient(uint32_t) const;
+    void sendMessage(uint32_t id, DeliveryType type, Message::Shared msg) const;
+    void broadcastMessage(DeliveryType type, Message::Shared msg) const;
+    void sendResponse(uint32_t, uint32_t requestId, StreamBuffer::Shared stream) const;
+    void handleRequest(uint32_t, uint32_t, StreamBuffer::Shared stream) const;
+
+    // prevent copy-construction
+    ENetServer(const ENetServer&);
+    // prevent assignment
+    ENetServer& operator=(const ENetServer&);
+
+    ENetHost* host_;
+    // NOTE: ENet allocates all peers at once and doesn't shuffle them,
+    // which leads to non-contiguous connected peers. This map
+    // will make it easier to manage them by id
+    std::map<uint32_t, ENetPeer*> clients_;
+    std::vector<Message::Shared> queue_;
+    std::map<uint32_t, RequestHandler> handlers_;
+    mutable uint32_t currentMsgId_;
 };
 
-enum class GameEvent : uint8_t {
-    BULLET_HIT,
-    PLAYER_DEATH
+std::string addressToString(const ENetAddress* address);
+
+// common\net\Client.cpp
+#include "net/Client.h"
+
+Client::Client()
+{
+}
+
+Client::~Client()
+{
+}
+
+// common\net\Client.h
+﻿#pragma once
+
+#include "Common.h"
+#include "net/DeliveryType.h"
+#include "net/Message.h"
+#include "serial/StreamBuffer.h"
+
+#include <memory>
+#include <vector>
+
+class Client {
+
+public:
+    typedef std::shared_ptr<Client> Shared;
+
+    Client();
+    virtual ~Client();
+
+    virtual bool connect(const std::string&, uint32_t) = 0;
+    virtual bool disconnect() = 0;
+    virtual bool isConnected() const = 0;
+
+    virtual void send(DeliveryType, StreamBuffer::Shared) const = 0;
+    virtual Message::Shared request(uint32_t, StreamBuffer::Shared) = 0;
+    virtual std::vector<Message::Shared> poll() = 0;
+
+    virtual void on(uint32_t, RequestHandler) = 0;
+
+private:
+    // prevent copy-construction
+    Client(const Client&);
+    // prevent assignment
+    Client& operator=(const Client&);
 };
 
-struct EventPacket : PacketHeader {
-    GameEvent eventId;
-    Vector2 position;
+// common\net\DeliveryType.h
+#pragma once
+
+enum class DeliveryType {
+    RELIABLE,
+    UNRELIABLE
 };
 
-struct PingPacket : PacketHeader {
-    double timestamp;
+// common\net\Message.cpp
+﻿#include "net/Message.h"
+
+Message::Shared Message::alloc(uint32_t id, uint8_t type, StreamBuffer::Shared stream)
+{
+    return std::make_shared<Message>(id, type, stream);
+}
+
+Message::Shared Message::alloc(uint32_t id, uint32_t requestId, uint8_t type, StreamBuffer::Shared stream)
+{
+    return std::make_shared<Message>(id, requestId, type, stream);
+}
+
+Message::Shared Message::alloc(uint32_t peerId, uint8_t type)
+{
+    return std::make_shared<Message>(peerId, type);
+}
+
+Message::Shared Message::alloc(uint32_t peerId)
+{
+    return std::make_shared<Message>(peerId);
+}
+
+Message::Message(uint32_t id, uint8_t type, StreamBuffer::Shared stream)
+    : id_(id)
+    , peerId_(0)
+    , requestId_(0)
+    , type_(type)
+    , stream_(stream)
+{
+}
+
+Message::Message(uint32_t id, uint32_t requestId, uint8_t type, StreamBuffer::Shared stream)
+    : id_(id)
+    , peerId_(0)
+    , requestId_(requestId)
+    , type_(type)
+    , stream_(stream)
+{
+}
+
+Message::Message(uint32_t peerId, uint8_t type)
+    : id_(0)
+    , peerId_(peerId)
+    , requestId_(0)
+    , type_(type)
+{
+}
+
+Message::Message(uint32_t peerId)
+    : id_(0)
+    , peerId_(peerId)
+    , requestId_(0)
+    , type_(0)
+{
+}
+
+uint32_t Message::id() const
+{
+    return id_;
+}
+
+uint32_t Message::requestId() const
+{
+    return requestId_;
+}
+
+uint32_t Message::peerId() const
+{
+    return peerId_;
+}
+
+uint8_t Message::type() const
+{
+    return type_;
+}
+
+StreamBuffer::Shared Message::stream() const
+{
+    return stream_;
+}
+
+std::vector<uint8_t> Message::serialize() const
+{
+    auto header = StreamBuffer::alloc();
+    header << id_;
+    header << requestId_;
+    header << type_;
+    return merge(header, stream_)->buffer();
+}
+
+void Message::deserialize(StreamBuffer::Shared stream)
+{
+    stream >> id_;
+    stream >> requestId_;
+    stream >> type_;
+    stream_ = stream;
+}
+
+// common\net\Message.h
+﻿#pragma once
+
+#include "serial/StreamBuffer.h"
+
+#include <memory>
+#include <string>
+#include <vector>
+#include <functional>
+
+typedef std::function<StreamBuffer::Shared(uint32_t, StreamBuffer::Shared)> RequestHandler;
+
+namespace MessageType {
+enum Types {
+    CONNECT,
+    DISCONNECT,
+    DATA,
+    DATA_REQUEST,
+    DATA_RESPONSE
+};
+}
+
+class Message {
+
+public:
+    typedef std::shared_ptr<Message> Shared;
+    static Shared alloc(uint32_t id, uint8_t, StreamBuffer::Shared); // data
+    static Shared alloc(uint32_t id, uint32_t requestId, uint8_t, StreamBuffer::Shared); // request / response
+    static Shared alloc(uint32_t peerId, uint8_t); // connect / disconnect
+    static Shared alloc(uint32_t peerId); // deserialize from
+
+    Message(uint32_t id, uint8_t, StreamBuffer::Shared); // data
+    Message(uint32_t id, uint32_t requestId, uint8_t, StreamBuffer::Shared); // request / response
+    Message(uint32_t peerId, uint8_t); // connect / disconnect
+    Message(uint32_t peerId); // deserialize from
+
+    uint32_t peerId() const;
+    uint32_t id() const;
+    uint32_t requestId() const;
+    uint8_t type() const;
+    StreamBuffer::Shared stream() const;
+
+    std::vector<uint8_t> serialize() const;
+    void deserialize(StreamBuffer::Shared);
+
+private:
+    // prevent copy-construction
+    Message(const Message&);
+    // prevent assignment
+    Message& operator=(const Message&);
+
+    uint32_t id_;
+    uint32_t peerId_;
+    uint32_t requestId_;
+    uint8_t type_;
+    StreamBuffer::Shared stream_;
 };
 
+// common\net\Server.cpp
+#include "net/Server.h"
 
-struct LobbyInfo {
-    uint32_t id;
-    char name[32];
-    char ip[16];
-    uint16_t port;
-    uint8_t players;
-    uint8_t maxPlayers;
-    char mapName[32];
+Server::Server()
+{
+}
+
+Server::~Server()
+{
+}
+
+// common\net\Server.h
+﻿#pragma once
+
+#include "../Common.h"
+#include "net/DeliveryType.h"
+#include "net/Message.h"
+#include "serial/StreamBuffer.h"
+
+#include <memory>
+#include <vector>
+
+class Server {
+
+public:
+    typedef std::shared_ptr<Server> Shared;
+
+    Server();
+    virtual ~Server();
+
+    virtual bool start(uint32_t) = 0;
+    virtual bool stop() = 0;
+    virtual bool isRunning() const = 0;
+
+    virtual uint32_t numClients() const = 0;
+
+    virtual void send(uint32_t, DeliveryType, StreamBuffer::Shared) const = 0;
+    virtual void broadcast(DeliveryType, StreamBuffer::Shared) const = 0;
+    virtual std::vector<Message::Shared> poll() = 0;
+
+    virtual void on(uint32_t, RequestHandler) = 0;
+
+private:
+    // prevent copy-construction
+    Server(const Server&);
+    // prevent assignment
+    Server& operator=(const Server&);
 };
 
-struct MasterRegisterPacket : PacketHeader {
-    uint16_t gamePort;
-    char serverName[32];
-    char mapName[32];
-    uint8_t maxPlayers;
+// common\serial\Serialization.cpp
+﻿#include "serial/Serialization.h"
+
+#include <cstring>
+
+uint64_t pack754(float64_t f, uint32_t bits, uint32_t expbits)
+{
+    float64_t fnorm;
+    int32_t shift;
+    int64_t sign, expo, significand;
+    uint32_t significandbits = bits - expbits - 1; // -1 for sign bit
+    if (f == 0.0) {
+        // get this special case out of the way
+        return 0;
+    }
+    // check sign and begin normalization
+    if (f < 0) {
+        sign = 1;
+        fnorm = -f;
+    } else {
+        sign = 0;
+        fnorm = f;
+    }
+    // get the normalized form of f and track the exponent
+    shift = 0;
+    while (fnorm >= 2.0) {
+        fnorm /= 2.0;
+        shift++;
+    }
+    while (fnorm < 1.0) {
+        fnorm *= 2.0;
+        shift--;
+    }
+    fnorm = fnorm - 1.0;
+    // calculate the binary form (non-float) of the significand data
+    significand = fnorm * ((1LL << significandbits) + 0.5f);
+    // get the biased exponent
+    expo = shift + ((1 << (expbits - 1)) - 1); // shift + bias
+    // return the final answer
+    return (sign << (bits - 1)) | (expo << (bits - expbits - 1)) | significand;
+}
+
+float64_t unpack754(uint64_t i, uint32_t bits, uint32_t expbits)
+{
+    float64_t result;
+    int64_t shift;
+    uint32_t bias;
+    uint32_t significandbits = bits - expbits - 1; // -1 for sign bit
+    if (i == 0) {
+        // get this special case out of the way
+        return 0.0;
+    }
+    // pull the significand
+    result = (i & ((1LL << significandbits) - 1)); // mask
+    result /= (1LL << significandbits); // convert back to float
+    result += 1.0f; // add the one back on
+    // deal with the exponent
+    bias = (1 << (expbits - 1)) - 1;
+    shift = ((i >> significandbits) & ((1LL << expbits) - 1)) - bias;
+    while (shift > 0) {
+        result *= 2.0;
+        shift--;
+    }
+    while (shift < 0) {
+        result /= 2.0;
+        shift++;
+    }
+    // sign it
+    result *= (i >> (bits - 1)) & 1 ? -1.0 : 1.0;
+    return result;
+}
+
+// common\serial\Serialization.h
+﻿#pragma once
+
+#include "Common.h"
+
+/**
+ * Bit packing macros
+ * Brian "Beej Jorgensen" Hall
+ * http://beej.us/guide/bgnet/output/html/singlepage/bgnet.html#serialization
+ */
+#define pack754_32(f) (static_cast<uint32_t>(pack754((f), 32, 8)))
+#define pack754_64(f) (pack754((f), 64, 11))
+#define unpack754_32(i) (static_cast<float32_t>(unpack754((i), 32, 8)))
+#define unpack754_64(i) (unpack754((i), 64, 11))
+
+uint64_t pack754(float64_t f, uint32_t bits, uint32_t expbits);
+float64_t unpack754(uint64_t i, uint32_t bits, uint32_t expbits);
+
+// common\serial\StreamBuffer.cpp
+﻿#include "StreamBuffer.h"
+#include "Serialization.h"
+
+#include <fstream>
+#include <cstring>
+
+StreamBuffer::Shared StreamBuffer::alloc(size_t numBytes)
+{
+    return std::make_shared<StreamBuffer>(numBytes);
+}
+
+StreamBuffer::Shared StreamBuffer::alloc(const uint8_t* data, size_t numBytes)
+{
+    return std::make_shared<StreamBuffer>(data, numBytes);
+}
+
+StreamBuffer::StreamBuffer(size_t numBytes)
+    : gpos_(0)
+    , ppos_(0)
+{
+    buffer_.reserve(numBytes);
+}
+
+StreamBuffer::StreamBuffer(const uint8_t* data, size_t numBytes)
+    : gpos_(0)
+    , ppos_(0)
+{
+    buffer_.reserve(numBytes);
+    buffer_.assign(data, data + numBytes);
+}
+
+const std::vector<uint8_t>& StreamBuffer::buffer() const
+{
+    return buffer_;
+}
+
+void StreamBuffer::seekg(size_t pos)
+{
+    gpos_ = pos;
+}
+
+void StreamBuffer::seekp(size_t pos)
+{
+    ppos_ = pos;
+}
+
+size_t StreamBuffer::tellg() const
+{
+    return gpos_;
+}
+
+size_t StreamBuffer::tellp() const
+{
+    return ppos_;
+}
+
+size_t StreamBuffer::size() const
+{
+    return buffer_.size();
+}
+
+bool StreamBuffer::eof() const
+{
+    return gpos_ >= buffer_.size();
+}
+
+// --- WRITE IMPLEMENTATIONS ---
+
+void StreamBuffer::write(bool data)
+{
+    buffer_.push_back(data ? 1 : 0);
+    ppos_++;
+}
+
+void StreamBuffer::write(uint8_t data)
+{
+    buffer_.push_back(data);
+    ppos_++;
+}
+
+void StreamBuffer::write(uint16_t data)
+{
+    uint8_t buff[2];
+    buff[0] = (uint8_t)(data >> 8);
+    buff[1] = (uint8_t)(data);
+    buffer_.insert(buffer_.end(), buff, buff + 2);
+    ppos_ += 2;
+}
+
+void StreamBuffer::write(uint32_t data)
+{
+    uint8_t buff[4];
+    buff[0] = (uint8_t)(data >> 24);
+    buff[1] = (uint8_t)(data >> 16);
+    buff[2] = (uint8_t)(data >> 8);
+    buff[3] = (uint8_t)(data);
+    buffer_.insert(buffer_.end(), buff, buff + 4);
+    ppos_ += 4;
+}
+
+void StreamBuffer::write(uint64_t data)
+{
+    uint8_t buff[8];
+    buff[0] = (uint8_t)(data >> 56);
+    buff[1] = (uint8_t)(data >> 48);
+    buff[2] = (uint8_t)(data >> 40);
+    buff[3] = (uint8_t)(data >> 32);
+    buff[4] = (uint8_t)(data >> 24);
+    buff[5] = (uint8_t)(data >> 16);
+    buff[6] = (uint8_t)(data >> 8);
+    buff[7] = (uint8_t)(data);
+    buffer_.insert(buffer_.end(), buff, buff + 8);
+    ppos_ += 8;
+}
+
+void StreamBuffer::write(float32_t data)
+{
+    write(pack754_32(data));
+}
+
+void StreamBuffer::write(float64_t data)
+{
+    write(pack754_64(data));
+}
+
+void StreamBuffer::write(const std::string& data)
+{
+    auto len = data.size();
+    write(uint32_t(len));
+    const char* bytes = data.c_str();
+    for (uint32_t i = 0; i < len; i++) {
+        write(uint8_t(bytes[i]));
+    }
+}
+
+void StreamBuffer::write(std::time_t data)
+{
+    write(uint64_t(data));
+}
+
+// --- RAYLIB TYPES WRITE ---
+
+void StreamBuffer::write(const Vector2& data)
+{
+    write((float32_t)data.x);
+    write((float32_t)data.y);
+}
+
+void StreamBuffer::write(const Vector3& data)
+{
+    write((float32_t)data.x);
+    write((float32_t)data.y);
+    write((float32_t)data.z);
+}
+
+void StreamBuffer::write(const Quaternion& data)
+{
+    write((float32_t)data.x);
+    write((float32_t)data.y);
+    write((float32_t)data.z);
+    write((float32_t)data.w);
+}
+
+void StreamBuffer::write(const Color& data)
+{
+    write((uint8_t)data.r);
+    write((uint8_t)data.g);
+    write((uint8_t)data.b);
+    write((uint8_t)data.a);
+}
+
+// --- READ IMPLEMENTATIONS ---
+
+void StreamBuffer::read(bool& data)
+{
+    if (eof()) { data = false; return; }
+    data = buffer_[gpos_++] ? true : false;
+}
+
+void StreamBuffer::read(uint8_t& data)
+{
+    if (eof()) { data = 0; return; }
+    data = buffer_[gpos_++];
+}
+
+void StreamBuffer::read(int8_t& data)
+{
+    if (eof()) { data = 0; return; }
+    data = (int8_t)buffer_[gpos_++];
+}
+
+void StreamBuffer::read(uint16_t& data)
+{
+    if (gpos_ + 2 > buffer_.size()) { data = 0; return; }
+    data = ((uint16_t)buffer_[gpos_] << 8) | buffer_[gpos_ + 1];
+    gpos_ += 2;
+}
+
+void StreamBuffer::read(int16_t& data)
+{
+    uint16_t ui = 0;
+    read(ui);
+    if (ui <= 0x7fffu) {
+        data = ui;
+    }
+    else {
+        data = -1 - (int16_t)(0xffffu - ui);
+    }
+}
+
+void StreamBuffer::read(uint32_t& data)
+{
+    if (gpos_ + 4 > buffer_.size()) { data = 0; return; }
+    data = ((uint32_t)buffer_[gpos_] << 24) |
+        ((uint32_t)buffer_[gpos_ + 1] << 16) |
+        ((uint32_t)buffer_[gpos_ + 2] << 8) |
+        buffer_[gpos_ + 3];
+    gpos_ += 4;
+}
+
+void StreamBuffer::read(int32_t& data)
+{
+    uint32_t ui = 0;
+    read(ui);
+    if (ui <= 0x7fffffffu) {
+        data = ui;
+    }
+    else {
+        data = -1 - (int32_t)(0xffffffffu - ui);
+    }
+}
+
+void StreamBuffer::read(uint64_t& data)
+{
+    if (gpos_ + 8 > buffer_.size()) { data = 0; return; }
+    data = ((uint64_t)buffer_[gpos_] << 56) |
+        ((uint64_t)buffer_[gpos_ + 1] << 48) |
+        ((uint64_t)buffer_[gpos_ + 2] << 40) |
+        ((uint64_t)buffer_[gpos_ + 3] << 32) |
+        ((uint64_t)buffer_[gpos_ + 4] << 24) |
+        ((uint64_t)buffer_[gpos_ + 5] << 16) |
+        ((uint64_t)buffer_[gpos_ + 6] << 8) |
+        buffer_[gpos_ + 7];
+    gpos_ += 8;
+}
+
+void StreamBuffer::read(int64_t& data)
+{
+    uint64_t ui = 0;
+    read(ui);
+    if (ui <= 0x7fffffffffffffffu) {
+        data = ui;
+    }
+    else {
+        data = -1 - (int64_t)(0xffffffffffffffffu - ui);
+    }
+}
+
+void StreamBuffer::read(float32_t& data)
+{
+    uint32_t packed = 0;
+    read(packed);
+    data = unpack754_32(packed);
+}
+
+void StreamBuffer::read(float64_t& data)
+{
+    uint64_t packed = 0;
+    read(packed);
+    data = unpack754_64(packed);
+}
+
+#ifdef __APPLE__
+void StreamBuffer::read(std::time_t& data)
+{
+    uint64_t val = 0;
+    read(val);
+    data = val;
+}
+#endif
+
+void StreamBuffer::read(std::string& data)
+{
+    uint32_t len = 0;
+    read(len);
+    if (len > 0 && gpos_ + len <= buffer_.size()) {
+        data.assign((const char*)&buffer_[gpos_], len);
+        gpos_ += len;
+    }
+    else {
+        data = "";
+    }
+}
+
+// --- RAYLIB TYPES READ ---
+
+void StreamBuffer::read(Vector2& data)
+{
+    read((float32_t&)data.x);
+    read((float32_t&)data.y);
+}
+
+void StreamBuffer::read(Vector3& data)
+{
+    read((float32_t&)data.x);
+    read((float32_t&)data.y);
+    read((float32_t&)data.z);
+}
+
+void StreamBuffer::read(Quaternion& data)
+{
+    read((float32_t&)data.x);
+    read((float32_t&)data.y);
+    read((float32_t&)data.z);
+    read((float32_t&)data.w);
+}
+
+void StreamBuffer::read(Color& data)
+{
+    read((uint8_t&)data.r);
+    read((uint8_t&)data.g);
+    read((uint8_t&)data.b);
+    read((uint8_t&)data.a);
+}
+
+void StreamBuffer::writeToFile(const std::string& path) const
+{
+    std::ofstream file(path, std::ios::binary);
+    if (file.is_open()) {
+        file.write((const char*)buffer_.data(), buffer_.size());
+        file.close();
+    }
+}
+
+StreamBuffer::Shared merge(const StreamBuffer::Shared& a, const StreamBuffer::Shared& b)
+{
+    std::vector<uint8_t> abuff;
+    std::vector<uint8_t> bbuff;
+    size_t size = 0;
+    if (a) {
+        abuff = a->buffer();
+        size += abuff.size();
+    }
+    if (b) {
+        bbuff = b->buffer();
+        size += bbuff.size();
+    }
+    auto bytes = std::vector<uint8_t>();
+    bytes.reserve(size);
+    if (a) {
+        bytes.insert(bytes.end(), abuff.begin(), abuff.end());
+    }
+    if (b) {
+        bytes.insert(bytes.end(), bbuff.begin(), bbuff.end());
+    }
+    return StreamBuffer::alloc(bytes.data(), bytes.size());
+}
+// common\serial\StreamBuffer.h
+﻿#pragma once
+
+#include "../Common.h"
+#include "raylib.h"
+
+#include <memory>
+#include <vector>
+#include <string>
+#include <ctime>
+
+class StreamBuffer {
+
+public:
+    typedef std::shared_ptr<StreamBuffer> Shared;
+    static Shared alloc(size_t = 1024);
+    static Shared alloc(const uint8_t*, size_t);
+
+    explicit StreamBuffer(size_t = 1024);
+    StreamBuffer(const uint8_t*, size_t);
+
+    const std::vector<uint8_t>& buffer() const;
+    void seekg(size_t);
+    void seekp(size_t);
+    size_t tellg() const;
+    size_t tellp() const;
+    size_t size() const;
+    bool eof() const;
+
+    void write(bool);
+    void write(uint8_t);
+    void write(uint16_t);
+    void write(uint32_t);
+    void write(uint64_t);
+    void write(float32_t);
+    void write(float64_t);
+    void write(std::time_t);
+    void write(const std::string&);
+
+    void write(const Vector2&);
+    void write(const Vector3&);
+    void write(const Quaternion&);
+    void write(const Color&);
+
+    void read(bool&);
+    void read(uint8_t&);
+    void read(int8_t&);
+    void read(uint16_t&);
+    void read(int16_t&);
+    void read(uint32_t&);
+    void read(int32_t&);
+    void read(uint64_t&);
+    void read(int64_t&);
+    void read(float32_t&);
+    void read(float64_t&);
+    void read(std::string&);
+#ifdef __APPLE__
+    void read(std::time_t&);
+#endif
+
+    void read(Vector2&);
+    void read(Vector3&);
+    void read(Quaternion&);
+    void read(Color&);
+
+    void writeToFile(const std::string&) const;
+
+private:
+    StreamBuffer(const StreamBuffer&);
+
+    StreamBuffer& operator=(const StreamBuffer&);
+
+    size_t gpos_;
+    size_t ppos_;
+    std::vector<uint8_t> buffer_;
 };
 
-struct MasterHeartbeatPacket : PacketHeader {
-    uint8_t currentPlayers;
-};
+StreamBuffer::Shared merge(const StreamBuffer::Shared&, const StreamBuffer::Shared&);
 
 
-struct MasterListRequestPacket : PacketHeader {
+template <typename T>
+StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const std::vector<T>& data)
+{
+    stream->write(uint32_t(data.size()));
+    for (auto& d : data) {
+        stream->write(d);
+    }
+    return stream;
+}
 
-};
+template <typename T>
+StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, std::vector<T>& data)
+{
+    uint32_t size = 0;
+    stream->read(size);
+    data.resize(size);
+    for (auto i = uint32_t(0); i < size; i++) {
+        stream->read(data[i]);
+    }
+    return stream;
+}
 
+template <typename T>
+StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const T& data)
+{
+    stream->write(data);
+    return stream;
+}
 
-struct MasterListResponsePacket : PacketHeader {
-    uint16_t count;
+template <typename T>
+StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, T& data)
+{
+    stream->read(data);
+    return stream;
+}
+// common\time\Time.cpp
+﻿#include "time/Time.h"
 
-};
+#include <iomanip>
+#include <sstream>
+
+std::string to_string_fixed(float64_t val, uint8_t n = 2)
+{
+    std::ostringstream out;
+    out << std::setprecision(n) << std::fixed << val;
+    return out.str();
+}
+
+namespace Time {
+
+std::time_t timestamp()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::system_clock::now().time_since_epoch())
+        .count();
+}
+
+void sleep(std::time_t duration)
+{
+    std::this_thread::sleep_for(std::chrono::microseconds(duration));
+}
+
+std::time_t fromMinutes(float64_t minutes)
+{
+    return minutes * 1000000 * 60;
+}
+
+std::time_t fromSeconds(float64_t seconds)
+{
+    return seconds * 1000000;
+}
+
+std::time_t fromMilliseconds(float64_t milliseconds)
+{
+    return milliseconds * 1000;
+}
+
+float64_t toMinutes(std::time_t t)
+{
+    return t / (1000000.0 * 60.0);
+}
+
+float64_t toSeconds(std::time_t t)
+{
+    return t / 1000000.0;
+}
+
+float64_t toMilliseconds(std::time_t t)
+{
+    return t / 1000.0;
+}
+
+std::string format(std::time_t microseconds)
+{
+    auto milliseconds = microseconds / 1000.0;
+    if (milliseconds < 1) {
+        return to_string_fixed(microseconds) + "μs";
+    }
+    auto seconds = milliseconds / 1000.0;
+    if (seconds < 1) {
+        return to_string_fixed(milliseconds) + "ms";
+    }
+    auto minutes = seconds / 60.0;
+    if (minutes < 1) {
+        return to_string_fixed(seconds) + "s";
+    }
+    auto hours = minutes / 60.0;
+    if (hours < 1) {
+        return to_string_fixed(minutes) + "m";
+    }
+    return to_string_fixed(hours) + "h";
+}
+}
+
+// common\time\Time.h
+#pragma once
+
+#include "Common.h"
+
+#include <chrono>
+#include <ctime>
+#include <string>
+#include <thread>
+
+namespace Time {
+
+/**
+ * Get timestamp in microseconds.
+ */
+std::time_t timestamp();
+
+/**
+ * Sleep thread for N microseconds.
+ */
+void sleep(std::time_t);
+
+/**
+ * Converts the arguments to microseconds.
+ */
+std::time_t fromMinutes(float64_t);
+std::time_t fromSeconds(float64_t);
+std::time_t fromMilliseconds(float64_t);
+
+/**
+ * Converts the arguments from microseconds to the specified type.
+ */
+float64_t toMinutes(std::time_t);
+float64_t toSeconds(std::time_t);
+float64_t toMilliseconds(std::time_t);
+
+/**
+ * Format microsecond into a pretty string.
+ */
+std::string format(std::time_t);
+}
+
 // engine\CMakeLists.txt
 ﻿#Engine module CMakeLists.txt
 add_library(GameEngine SHARED
@@ -1405,10 +2844,14 @@ inline Vector2 ToRay(cpVect v) {
 // engine\ServerHost.cpp
 ﻿#define _CRT_SECURE_NO_WARNINGS
 #include "ServerHost.h"
-#include "Utils/ConfigManager.h"
+#include "../common/NetworkPackets.h"
 #include <iostream>
-#include <cstring> 
-ServerHost::ServerHost() : running(false) {}
+#include <chrono>
+
+ServerHost::ServerHost() : running(false) {
+    // Выделяем память под сервер
+    netServer = ENetServer::alloc();
+}
 
 ServerHost::~ServerHost() {
     Stop();
@@ -1417,34 +2860,16 @@ ServerHost::~ServerHost() {
 bool ServerHost::Start(int port) {
     if (running) return false;
 
-    ENetAddress address;
-    address.host = ENET_HOST_ANY;
-    address.port = port;
-
-    server = enet_host_create(&address, 32, 2, 0, 0);
-    if (!server) {
-        std::cerr << "An error occurred while trying to create an ENet server host.\n";
+    // Запуск через обертку
+    if (!netServer->start(port)) {
+        std::cerr << "SERVER: Failed to start on port " << port << std::endl;
         return false;
     }
 
+    std::cout << "SERVER: Started on port " << port << std::endl;
     running = true;
     serverThread = std::thread(&ServerHost::ServerLoop, this);
-    ConnectToMaster();
     return true;
-}
-
-void ServerHost::ConnectToMaster() {
-    masterClientHost = enet_host_create(NULL, 1, 2, 0, 0);
-    if (!masterClientHost) return;
-
-    ENetAddress addr;
-    std::string ip = ConfigManager::GetClient().masterServerIp;
-    int port = ConfigManager::GetClient().masterServerPort;
-
-    enet_address_set_host(&addr, ip.c_str());
-    addr.port = port;
-
-    masterPeer = enet_host_connect(masterClientHost, &addr, 2, 0);
 }
 
 void ServerHost::Stop() {
@@ -1452,129 +2877,121 @@ void ServerHost::Stop() {
     if (serverThread.joinable()) {
         serverThread.join();
     }
-    if (server) {
-        enet_host_destroy(server);
-        server = nullptr;
-    }
-    // Очистка мастера
-    if (masterClientHost) {
-        enet_host_destroy(masterClientHost);
-        masterClientHost = nullptr;
-    }
+    // Остановка обертки
+    netServer->stop();
 }
 
-
 void ServerHost::ServerLoop() {
-    std::cout << "Server started loop on port " << server->address.port << ".\n";
-    const double dt = 1.0 / 60.0;
+    using clock = std::chrono::high_resolution_clock;
+    auto lastTime = clock::now();
     double accumulator = 0.0;
-    double lastTime = GetTime();
+    const double dt = 1.0 / 60.0;
+    double snapshotTimer = 0.0;
 
-    while (running) {
-        double currentTime = GetTime();
-        double frameTime = currentTime - lastTime;
+    while (running && netServer->isRunning()) {
+        auto currentTime = clock::now();
+        std::chrono::duration<double> frameTime = currentTime - lastTime;
         lastTime = currentTime;
-        accumulator += frameTime;
+        accumulator += frameTime.count();
+        snapshotTimer += frameTime.count();
 
-        // --- Master Server Events ---
-        if (masterClientHost) {
-            ENetEvent mEvent;
-            while (enet_host_service(masterClientHost, &mEvent, 0) > 0) {
-                if (mEvent.type == ENET_EVENT_TYPE_CONNECT) {
-                    std::cout << "Connected to Master Server!\n";
-                    MasterRegisterPacket reg;
-                    reg.type = PacketType::master_REGISTER;
-                    reg.gamePort = server->address.port;
-                    reg.maxPlayers = 8;
-                    // Исправлено: strncpy
-                    strncpy(reg.serverName, ConfigManager::GetServer().serverName.c_str(), 31);
-                    strncpy(reg.mapName, "Map 1", 31);
+        // 1. Обработка входящих сообщений
+        auto msgs = netServer->poll();
 
-                    ENetPacket* p = enet_packet_create(&reg, sizeof(reg), ENET_PACKET_FLAG_RELIABLE);
-                    enet_peer_send(masterPeer, 0, p);
-                }
-                // Disconnect handling...
+        for (auto& msg : msgs) {
+            uint32_t peerId = msg->peerId();
+
+            if (msg->type() == MessageType::CONNECT) {
+                std::cout << "SERVER: Client " << peerId << " connected.\n";
+
+                // Создаем игрока, используя ID пира
+                // (Придется доработать CreatePlayer в GameScene, см. ниже, 
+                // или просто передадим этот ID)
+                auto player = gameScene.CreatePlayerWithId(peerId);
+
+                // Отправляем INIT пакет
+                auto stream = StreamBuffer::alloc();
+                stream->write((uint8_t)GamePacket::INIT);
+                stream->write(player->id);
+
+                // Шлем надежно конкретному клиенту
+                netServer->send(peerId, DeliveryType::RELIABLE, stream);
             }
-
-            // Heartbeat
-            if (GetTime() - lastHeartbeatTime > 5.0 && masterPeer) {
-                lastHeartbeatTime = GetTime();
-                MasterHeartbeatPacket hb;
-                hb.type = PacketType::master_HEARTBEAT;
-                hb.currentPlayers = (uint8_t)gameScene.objects.size();
-                ENetPacket* p = enet_packet_create(&hb, sizeof(hb), ENET_PACKET_FLAG_UNSEQUENCED);
-                enet_peer_send(masterPeer, 0, p);
+            else if (msg->type() == MessageType::DISCONNECT) {
+                std::cout << "SERVER: Client " << peerId << " disconnected.\n";
+                // Удаляем игрока
+                gameScene.objects.erase(peerId);
             }
-        }
+            else if (msg->type() == MessageType::DATA) {
+                // Читаем Payload
+                auto stream = msg->stream();
+                uint8_t packetType = 0;
+                stream->read(packetType);
 
-        // --- Game Server Events ---
-        ENetEvent event;
-        while (enet_host_service(server, &event, 0) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT: {
-                std::cout << "Client connected.\n";
-                auto player = gameScene.CreatePlayer();
-                event.peer->data = (void*)(uintptr_t)player->id;
+                if (packetType == GamePacket::INPUT) {
+                    PlayerInputPacket input;
+                    stream >> input; // Десериализация
 
-                InitPacket initPkt;
-                initPkt.type = PacketType::server_INIT;
-                initPkt.yourPlayerId = player->id;
-                ENetPacket* packet = enet_packet_create(&initPkt, sizeof(InitPacket), ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(event.peer, 0, packet);
-                break;
-            }
-            case ENET_EVENT_TYPE_RECEIVE: {
-                if (event.packet->dataLength < sizeof(PacketHeader)) break;
-                PacketHeader* header = (PacketHeader*)event.packet->data;
-
-                if (header->type == PacketType::client_PING) {
-                    PingPacket* pingIn = (PingPacket*)event.packet->data;
-                    PingPacket pongOut;
-                    pongOut.type = PacketType::server_PONG; // Теперь определено
-                    pongOut.timestamp = pingIn->timestamp;
-                    ENetPacket* p = enet_packet_create(&pongOut, sizeof(PingPacket), ENET_PACKET_FLAG_UNSEQUENCED);
-                    enet_peer_send(event.peer, 0, p);
-                }
-                else if (header->type == PacketType::client_INPUT) {
-                    PlayerInputPacket* input = (PlayerInputPacket*)event.packet->data;
-                    uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
-                    if (gameScene.objects.count(playerId)) {
-                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[playerId]);
+                    if (gameScene.objects.count(peerId)) {
+                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
                         if (p) {
-                            p->ApplyInput(input->movement);
-                            p->aimTarget = input->aimTarget;
-                            p->wantsToShoot = input->isShooting;
+                            p->ApplyInput(input.movement);
+                            p->aimTarget = input.aimTarget;
+                            p->wantsToShoot = input.isShooting;
                         }
                     }
                 }
-                enet_packet_destroy(event.packet);
-                break;
-            }
-            case ENET_EVENT_TYPE_DISCONNECT:
-                uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
-                gameScene.objects.erase(playerId);
-                std::cout << "Client disconnected.\n";
-                break;
             }
         }
 
-        // Physics Step
+        // 2. Обновление мира
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
         }
 
-        // Snapshots
-        static double snapshotTimer = 0;
-        snapshotTimer += frameTime;
-        if (snapshotTimer > 0.05) {
-            auto data = gameScene.SerializeSnapshot();
-            ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_UNSEQUENCED);
-            enet_host_broadcast(server, 1, packet);
+        // 3. Рассылка состояния (Snapshot) - 20 раз в секунду
+        if (snapshotTimer >= 0.05) {
+            BroadcastSnapshot();
+            snapshotTimer = 0;
         }
 
-        WaitTime(0.001);
+        // Разгрузка CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+void ServerHost::BroadcastSnapshot() {
+    if (netServer->numClients() == 0) return;
+
+    auto stream = StreamBuffer::alloc(4096); // Буфер побольше
+
+    stream->write((uint8_t)GamePacket::SNAPSHOT);
+    stream->write((uint32_t)gameScene.objects.size());
+
+    for (auto& [id, obj] : gameScene.objects) {
+        EntityState state;
+        state.id = obj->id;
+
+        if (obj->body) {
+            state.position = ToRay(cpBodyGetPosition(obj->body));
+            state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
+        }
+        else {
+            state.position = { 0,0 };
+            state.rotation = 0;
+        }
+
+        state.health = obj->health;
+        state.maxHealth = obj->maxHealth;
+        state.type = obj->type;
+        state.radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
+        state.color = obj->color;
+
+        stream << state;
+    }
+
+    netServer->broadcast(DeliveryType::UNRELIABLE, stream);
 }
 // engine\ServerHost.h
 ﻿#pragma once
@@ -1582,23 +2999,17 @@ void ServerHost::ServerLoop() {
 #include "fix_win32_compatibility.h"
 #endif
 
-#include <enet.h>
-
+#include "enet/ENetServer.h"
+#include "Scenes/GameScene.h"
 #include <thread>
 #include <atomic>
-#include "Scenes/GameScene.h"
 
 class ServerHost {
-    ENetHost* server = nullptr;
+    ENetServer::Shared netServer;
     GameScene gameScene;
-    std::atomic<bool> running;
+
+    std::atomic<bool> running{ false };
     std::thread serverThread;
-
-    ENetHost* gameServerHost = nullptr;
-
-    ENetHost* masterClientHost = nullptr;
-    ENetPeer* masterPeer = nullptr;
-    double lastHeartbeatTime = 0;
 
 public:
     ServerHost();
@@ -1608,9 +3019,7 @@ public:
     void Stop();
 
     void ServerLoop();
-
-    void ConnectToMaster();
-    void SendHeartbeat();
+    void BroadcastSnapshot();
 };
 // engine\ECS\Bullet.h
 ﻿#pragma once
@@ -1783,42 +3192,35 @@ public:
 #include <memory>
 #include <map>
 #include <algorithm>
-#include "../ECS/Player.h"
-#include "../ECS/Bullet.h"
-#include "../PhysicsUtils.h"
+#include "ECS/Player.h"
+#include "ECS/Bullet.h"
+#include "PhysicsUtils.h"
 
 class GameScene {
 public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
-    uint32_t nextId = 1;
+    uint32_t nextId = 1000; // Начинаем с 1000, чтобы не пересекаться с PeerID (0-64), хотя это не критично
     float width = 2000;
     float height = 2000;
 
     GameScene() {
         space = cpSpaceNew();
-        // Гравитации нет
         cpSpaceSetGravity(space, cpv(0, 0));
-
         CreateMapBoundaries();
     }
 
     ~GameScene() {
-        // Сначала очищаем объекты (их деструкторы удалят тела из space)
         objects.clear();
-        // Потом удаляем space
         cpSpaceFree(space);
     }
 
     void CreateMapBoundaries() {
-        // Статическое тело для стен (не добавляем его в space, только shape)
         cpBody* staticBody = cpSpaceGetStaticBody(space);
-
         float w = width;
         float h = height;
         float thick = 20.0f;
 
-        // 4 Стены (Segment Shapes)
         auto addWall = [&](Vector2 a, Vector2 b) {
             cpShape* wall = cpSpaceAddShape(space, cpSegmentShapeNew(staticBody, ToCp(a), ToCp(b), thick));
             cpShapeSetElasticity(wall, 0.5f);
@@ -1826,24 +3228,28 @@ public:
             cpShapeSetCollisionType(wall, COLLISION_WALL);
             };
 
-        addWall({ 0,0 }, { w, 0 });      // Top
-        addWall({ 0,h }, { w, h });      // Bottom
-        addWall({ 0,0 }, { 0, h });      // Left
-        addWall({ w,0 }, { w, h });      // Right
+        addWall({ 0,0 }, { w, 0 });
+        addWall({ 0,h }, { w, h });
+        addWall({ 0,0 }, { 0, h });
+        addWall({ w,0 }, { w, h });
     }
 
-    std::shared_ptr<Player> CreatePlayer() {
+    // Создание игрока с конкретным ID (от ENet)
+    std::shared_ptr<Player> CreatePlayerWithId(uint32_t id) {
         Vector2 startPos = { width / 2, height / 2 };
-        auto p = std::make_shared<Player>(nextId++, startPos, space);
-        objects[p->id] = p;
+        auto p = std::make_shared<Player>(id, startPos, space);
+        objects[id] = p;
         return p;
     }
 
+    // Обычное создание (для ботов)
+    std::shared_ptr<Player> CreatePlayer() {
+        return CreatePlayerWithId(nextId++);
+    }
+
     void Update(float dt) {
-        // Шаг физики (фиксированный шаг для стабильности)
         cpSpaceStep(space, dt);
 
-        // Логика объектов и спавн пуль
         std::vector<std::shared_ptr<Bullet>> newBullets;
 
         for (auto it = objects.begin(); it != objects.end();) {
@@ -1855,13 +3261,14 @@ public:
                 if (p && p->spawnBulletSignal) {
                     p->spawnBulletSignal = false;
                     Vector2 spawnPos = ToRay(cpBodyGetPosition(p->body));
+                    // ID пули генерируем сами
                     auto b = std::make_shared<Bullet>(nextId++, spawnPos, p->bulletDir, p->id, space);
                     newBullets.push_back(b);
                 }
             }
 
             if (obj->destroyFlag) {
-                it = objects.erase(it); // Деструктор GameObject очистит Chipmunk ресурсы
+                it = objects.erase(it);
             }
             else {
                 ++it;
@@ -1870,9 +3277,6 @@ public:
 
         for (auto& b : newBullets) objects[b->id] = b;
 
-        // Обработка урона (Manual Query)
-        // Chipmunk имеет систему коллбеков, но для совместимости с вашей логикой
-        // сделаем простую проверку расстояний, но физика отталкивания будет от Chipmunk.
         HandleDamageManual();
     }
 
@@ -1880,7 +3284,6 @@ public:
         for (auto& [bid, bObj] : objects) {
             if (bObj->type != EntityType::BULLET) continue;
             auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
-
             Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
 
             for (auto& [pid, pObj] : objects) {
@@ -1888,14 +3291,11 @@ public:
                 if (pid == bullet->ownerId) continue;
 
                 Vector2 pPos = ToRay(cpBodyGetPosition(pObj->body));
-
-                // Простая проверка радиуса (20 танк + 5 пуля)
                 if (Vector2Distance(bPos, pPos) < 25.0f) {
                     pObj->health -= 10;
                     bullet->destroyFlag = true;
 
                     if (pObj->health <= 0) {
-                        // Respawn
                         pObj->health = 100;
                         cpVect randPos = cpv(GetRandomValue(100, (int)width - 100), GetRandomValue(100, (int)height - 100));
                         cpBodySetPosition(pObj->body, randPos);
@@ -1905,42 +3305,13 @@ public:
             }
         }
     }
-
-    std::vector<uint8_t> SerializeSnapshot() {
-        size_t size = sizeof(WorldSnapshotPacket) + (objects.size() * sizeof(EntityState));
-        std::vector<uint8_t> buffer(size);
-
-        WorldSnapshotPacket* header = (WorldSnapshotPacket*)buffer.data();
-        header->type = PacketType::server_SNAPSHOT;
-        header->entityCount = (uint32_t)objects.size();
-
-        EntityState* states = (EntityState*)(buffer.data() + sizeof(WorldSnapshotPacket));
-        int i = 0;
-        for (auto& [id, obj] : objects) {
-            states[i].id = obj->id;
-
-            // Берем координаты из Chipmunk
-            if (obj->body) {
-                states[i].position = ToRay(cpBodyGetPosition(obj->body));
-                states[i].rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
-            }
-
-            states[i].health = obj->health;
-            states[i].maxHealth = obj->maxHealth;
-            states[i].type = obj->type;
-            states[i].radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
-            states[i].color = obj->color;
-            i++;
-        }
-        return buffer;
-    }
 };
 // engine\Scenes\Scene.h
 ﻿#pragma once
-
-#include "raylib.h"
+#include "external/fix_win32_compatibility.h"
 #include <vector>
-#include <cstdint>
+#include <memory>
+#include "net/Message.h" // Подключаем Message из примера
 
 class GameClient;
 
@@ -1957,7 +3328,8 @@ public:
     virtual void Draw() = 0;
     virtual void DrawGUI() = 0;
     virtual void Exit() = 0;
-    virtual void OnPacketReceived(const uint8_t* data, size_t size) {};
+
+    virtual void OnMessage(Message::Shared msg) {};
 };
 // engine\Utils\ConfigManager.cpp
 ﻿#include "ConfigManager.h"
@@ -1972,7 +3344,6 @@ void ConfigManager::Initialize(const std::string& savePath) {
         try { std::filesystem::create_directories(savePath); }
         catch (const std::exception& e) { std::cerr << e.what() << std::endl; }
     }
-
     configPath = savePath + "config.json";
     Load();
     LoadFonts();
@@ -1980,18 +3351,15 @@ void ConfigManager::Initialize(const std::string& savePath) {
 }
 
 void ConfigManager::CreateDefaultConfig() {
-    std::cout << "Creating default config..." << std::endl;
-    config.client.playerName = "Rookie";
+    config.client.playerName = "Player";
     config.client.lastIp = "127.0.0.1";
-    config.client.language = "ru";
     config.server.port = 7777;
+    config.client.favoriteServers.push_back({ "Localhost", "127.0.0.1", 7777 });
     Save();
 }
 
 void ConfigManager::Save() {
     json j;
-
-    // Сериализация избранного
     json jFav = json::array();
     for (const auto& s : config.client.favoriteServers) {
         jFav.push_back({ {"name", s.name}, {"ip", s.ip}, {"port", s.port} });
@@ -2000,18 +3368,14 @@ void ConfigManager::Save() {
     j["client"] = {
         {"playerName", config.client.playerName},
         {"lastIp", config.client.lastIp},
+        {"lastPort", config.client.lastPort},
         {"language", config.client.language},
-        {"masterServerIp", config.client.masterServerIp},   // Save
-        {"masterServerPort", config.client.masterServerPort}, // Save
-        {"masterVolume", config.client.masterVolume},
-        {"musicVolume", config.client.musicVolume},
         {"fullscreen", config.client.fullscreen},
         {"targetFPS", config.client.targetFPS},
-        {"favorites", jFav} // Save Favorites
+        {"favorites", jFav}
     };
     j["server"] = {
-        {"port", config.server.port},
-        {"maxPlayers", config.server.maxPlayers}
+        {"port", config.server.port}
     };
 
     std::ofstream file(configPath);
@@ -2028,15 +3392,11 @@ void ConfigManager::Load() {
                 auto& c = j["client"];
                 config.client.playerName = c.value("playerName", "Player");
                 config.client.lastIp = c.value("lastIp", "127.0.0.1");
-                config.client.language = c.value("language", "ru");
-                config.client.masterServerIp = c.value("masterServerIp", "127.0.0.1");
-                config.client.masterServerPort = c.value("masterServerPort", 7777);
+                config.client.lastPort = c.value("lastPort", 7777);
                 config.client.targetFPS = c.value("targetFPS", 60);
-                config.client.fullscreen = c.value("fullscreen", false);
 
-                // Загрузка избранного
-                config.client.favoriteServers.clear();
                 if (c.contains("favorites")) {
+                    config.client.favoriteServers.clear();
                     for (auto& elem : c["favorites"]) {
                         SavedServer s;
                         s.name = elem.value("name", "Server");
@@ -2047,8 +3407,7 @@ void ConfigManager::Load() {
                 }
             }
             if (j.contains("server")) {
-                auto& s = j["server"];
-                config.server.port = s.value("port", 7777);
+                config.server.port = j["server"].value("port", 7777);
             }
         }
         catch (...) { CreateDefaultConfig(); }
@@ -2059,65 +3418,38 @@ void ConfigManager::LoadFonts() {
     int codepoints[512] = { 0 };
     for (int i = 0; i < 95; i++) codepoints[i] = 32 + i;
     for (int i = 0; i < 255; i++) codepoints[96 + i] = 0x400 + i;
-
     const char* fontPath = "assets/fonts/Roboto-Regular.ttf";
     if (FileExists(fontPath)) {
 #ifdef ANDROID
         mainFont = LoadFontEx(fontPath, 60, codepoints, 512);
 #else
         mainFont = LoadFontEx(fontPath, 32, codepoints, 512);
-#endif // ANDROID
+#endif 
     }
-    else {
-        mainFont = GetFontDefault();
-    }
+    else { mainFont = GetFontDefault(); }
 }
-
-void ConfigManager::UnloadResources() {
-    if (mainFont.texture.id != 0) UnloadFont(mainFont);
-}
-
+void ConfigManager::UnloadResources() { if (mainFont.texture.id != 0) UnloadFont(mainFont); }
 void ConfigManager::LoadLanguage(const std::string& langCode) {
     localizedStrings.clear();
     std::string path = "assets/lang/lang_" + langCode + ".json";
-
     char* text = LoadFileText(path.c_str());
     if (text) {
         try {
             json j = json::parse(text);
-            for (auto& element : j.items()) {
-                localizedStrings[element.key()] = element.value().get<std::string>();
-            }
+            for (auto& element : j.items()) localizedStrings[element.key()] = element.value().get<std::string>();
         }
-        catch (...) { std::cerr << "Lang parse error\n"; }
+        catch (...) {}
         UnloadFileText(text);
     }
-    else {
-        std::cerr << "Lang file not found: " << path << std::endl;
-    }
 }
-
 const char* ConfigManager::Text(const std::string& key) {
     if (localizedStrings.count(key)) return localizedStrings[key].c_str();
     return key.c_str();
 }
-
-ClientConfig& ConfigManager::GetClient() {
-    return config.client;
-}
-
-ServerConfig& ConfigManager::GetServer() {
-    return config.server;
-}
-
-Font ConfigManager::GetFont() {
-    return mainFont;
-}
-
-void ConfigManager::SetFont(Font font)
-{
-    mainFont = font;
-}
+ClientConfig& ConfigManager::GetClient() { return config.client; }
+ServerConfig& ConfigManager::GetServer() { return config.server; }
+Font ConfigManager::GetFont() { return mainFont; }
+void ConfigManager::SetFont(Font font) { mainFont = font; }
 // engine\Utils\ConfigManager.h
 ﻿#pragma once
 #include <string>
@@ -2125,13 +3457,12 @@ void ConfigManager::SetFont(Font font)
 #include <filesystem>
 #include <iostream>
 #include <map>
-#include <vector> // Важно для vector
+#include <vector>
 #include "raylib.h"
 #include "nlohmann/json.hpp"
 
 using json = nlohmann::json;
 
-// Структура для избранного сервера
 struct SavedServer {
     std::string name;
     std::string ip;
@@ -2141,20 +3472,14 @@ struct SavedServer {
 struct ClientConfig {
     std::string playerName = "Player";
     std::string lastIp = "127.0.0.1";
+    int lastPort = 7777;
     std::string language = "ru";
-
-    // Новые поля для Master Server
-    std::string masterServerIp = "127.0.0.1";
-    int masterServerPort = 7777; // Обычно мастер висит на другом порту, например 8080, но пусть будет 7777 если так задумано
 
     float masterVolume = 1.0f;
     float musicVolume = 0.7f;
-    float sfxVolume = 0.8f;
     bool fullscreen = false;
     int targetFPS = 60;
-    int lastPort = 7777;
 
-    // Список избранного
     std::vector<SavedServer> favoriteServers;
 };
 
@@ -2162,8 +3487,6 @@ struct ServerConfig {
     int port = 7777;
     int maxPlayers = 8;
     int tickRate = 60;
-    std::string serverName = "Void Assault Server";
-    std::string password = "";
 };
 
 struct GameConfig {
@@ -2182,10 +3505,8 @@ private:
 
 public:
     static void Initialize(const std::string& savePath);
-
     static void Save();
     static void Load();
-
     static void LoadLanguage(const std::string& langCode);
     static const char* Text(const std::string& key);
 
@@ -2371,3 +3692,108 @@ public:
         if (host) enet_host_destroy(host);
     }
 };
+// tests\CMakeLists.txt
+﻿
+    add_executable(test_net
+        test_net.cpp
+    )
+        target_include_directories(test_net PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
+
+    target_link_libraries(test_net PRIVATE enet::enet_shared GameCommon)
+// tests\test_net.cpp
+﻿#define _CRT_SECURE_NO_WARNINGS
+// Если fix_win32_compatibility.h не нужен для консольного приложения, можно закомментировать
+#include "external/fix_win32_compatibility.h"
+
+#include <iostream>
+#include <thread>
+#include <chrono>
+#include <string>
+#include "enet/ENetServer.h"
+#include "enet/ENetClient.h"
+
+// Глобальные переменные для теста
+ENetServer::Shared server;
+ENetClient::Shared client;
+std::atomic<bool> serverRunning{ true };
+
+void ServerThreadFunc(int port) {
+    if (!server->start(port)) {
+        std::cerr << "SERVER: Failed to start on port " << port << "!" << std::endl;
+        return;
+    }
+    std::cout << "SERVER: Listening on port " << port << std::endl;
+
+    while (serverRunning) {
+        auto msgs = server->poll();
+
+        for (auto& msg : msgs) {
+            if (msg->type() == MessageType::CONNECT) {
+                std::cout << "SERVER: Client connected! ID: " << msg->peerId() << std::endl;
+            }
+            else if (msg->type() == MessageType::DATA) {
+                std::string s;
+                msg->stream()->read(s);
+                std::cout << "SERVER: Received data: " << s << std::endl;
+            }
+            else if (msg->type() == MessageType::DISCONNECT) {
+                std::cout << "SERVER: Client disconnected." << std::endl;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    server->stop();
+    std::cout << "SERVER: Stopped." << std::endl;
+}
+
+int main() {
+    if (enet_initialize() != 0) {
+        std::cerr << "FATAL: Failed to initialize ENet!" << std::endl;
+        return -1;
+    }
+    atexit(enet_deinitialize);
+
+    std::cout << "--- STARTING NETWORK TEST ---" << std::endl;
+
+    server = ENetServer::alloc();
+    client = ENetClient::alloc();
+
+    int port = 7780;
+
+    std::thread sThread(ServerThreadFunc, port);
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    system("pause");
+    std::cout << "CLIENT: Connecting to 127.0.0.1:" << port << "..." << std::endl;
+
+    if (client->connect("::1", port)) {
+        std::cout << "CLIENT: Connected successfully!" << std::endl;
+
+        auto stream = StreamBuffer::alloc();
+        stream->write(std::string("Hello Server!"));
+        client->send(DeliveryType::RELIABLE, stream);
+        std::cout << "CLIENT: Data sent." << std::endl;
+
+        std::cout << "CLIENT: Polling loop started..." << std::endl;
+        for (int i = 0; i < 50; i++) {
+            client->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    else {
+        std::cerr << "CLIENT: Failed to connect. Check firewall or server status." << std::endl;
+    }
+    std::cout << "--- STOPPING ---" << std::endl;
+    serverRunning = false;
+
+    if (sThread.joinable()) {
+        sThread.join();
+    }
+
+    client.reset();
+    server.reset();
+
+    std::cout << "--- TEST FINISHED ---" << std::endl;
+    return 0;
+}

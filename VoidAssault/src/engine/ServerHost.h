@@ -3,14 +3,15 @@
 #include "fix_win32_compatibility.h"
 #endif
 
-#include <enet.h>
+#include "enet/ENetServer.h"
+#include "Scenes/GameScene.h"
 #include <thread>
 #include <atomic>
-#include "Scenes/GameScene.h"
 
 class ServerHost {
-    ENetHost* server = nullptr;
+    ENetServer::Shared netServer;
     GameScene gameScene;
+
     std::atomic<bool> running{ false };
     std::thread serverThread;
 
@@ -22,4 +23,5 @@ public:
     void Stop();
 
     void ServerLoop();
+    void BroadcastSnapshot();
 };

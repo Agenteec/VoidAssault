@@ -1,21 +1,14 @@
 ﻿#include "GameClient.h"
-#include "raygui_wrapper.h"
 #include "scenes/MainMenuScene.h" 
 #include "scenes/GameplayScene.h"
-#include <queue>
-#include <vector>
-
-// Буфер пакетов (чтобы не терять Init при загрузке)
-std::queue<std::pair<std::vector<uint8_t>, size_t>> packetQueue;
 
 GameClient::GameClient() {
     InitWindow(screenWidth, screenHeight, "Void Assault");
     SetTargetFPS(60);
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-    if (!network.Init()) {
-        TraceLog(LOG_ERROR, "Failed to create ENet client host");
-    }
+    // Инициализация ENetClient
+    netClient = ENetClient::alloc();
 
     GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 }
@@ -23,7 +16,9 @@ GameClient::GameClient() {
 GameClient::~GameClient() {
     StopHost();
     if (currentScene) currentScene->Exit();
-    network.Shutdown();
+
+    if (netClient) netClient->disconnect();
+
     CloseWindow();
 }
 
@@ -32,7 +27,7 @@ void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
 }
 
 void GameClient::ReturnToMenu() {
-    network.Disconnect();
+    if (netClient) netClient->disconnect();
     ChangeScene(std::make_shared<MainMenuScene>(this));
 }
 
@@ -69,47 +64,37 @@ void GameClient::Run() {
             currentScene = nextScene;
             currentScene->Enter();
             nextScene = nullptr;
-
-            while (!packetQueue.empty()) {
-                auto& p = packetQueue.front();
-                currentScene->OnPacketReceived(p.first.data(), p.first.size());
-                packetQueue.pop();
-            }
         }
 
         float dt = GetFrameTime();
 
-        if (network.clientHost) {
-            ENetEvent event;
-            while (enet_host_service(network.clientHost, &event, 10) > 0) {
-                switch (event.type) {
-                case ENET_EVENT_TYPE_CONNECT:
-                    TraceLog(LOG_INFO, ">> CLIENT: Connected! Switching to Gameplay...");
-                    network.isConnected = true;
-                    ChangeScene(std::make_shared<GameplayScene>(this));
-                    break;
+        // --- Сетевой цикл ---
+        if (netClient) {
+            auto msgs = netClient->poll();
 
-                case ENET_EVENT_TYPE_DISCONNECT:
-                    network.isConnected = false;
+            for (auto& msg : msgs) {
+                if (msg->type() == MessageType::CONNECT) {
+                    TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
+                    // Если мы не в игре, переходим
+                    if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+                        ChangeScene(std::make_shared<GameplayScene>(this));
+                    }
+                }
+                else if (msg->type() == MessageType::DISCONNECT) {
                     TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
                     if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                        ChangeScene(std::make_shared<MainMenuScene>(this));
+                        ReturnToMenu();
                     }
-                    break;
-
-                case ENET_EVENT_TYPE_RECEIVE:
-                    if (nextScene != nullptr) {
-                        std::vector<uint8_t> data(event.packet->data, event.packet->data + event.packet->dataLength);
-                        packetQueue.push({ data, event.packet->dataLength });
+                }
+                else if (msg->type() == MessageType::DATA) {
+                    // Передаем данные в текущую сцену через OnMessage
+                    if (currentScene) {
+                        currentScene->OnMessage(msg);
                     }
-                    else if (currentScene) {
-                        currentScene->OnPacketReceived(event.packet->data, event.packet->dataLength);
-                    }
-                    enet_packet_destroy(event.packet);
-                    break;
                 }
             }
         }
+        // --------------------
 
         if (currentScene) {
             currentScene->Update(dt);

@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include "external/fix_win32_compatibility.h"
 #include "../../engine/Scenes/Scene.h"
 #include "../../common/NetworkPackets.h"
 #include "../ParticleSystem.h"
@@ -7,14 +8,15 @@
 #include <map>
 #include <vector>
 #include <memory>
+
 class GameClient;
+
 struct InterpolatedEntity {
     EntityState current;
     EntityState previous;
     float lastUpdateTime;
     Vector2 renderPos;
     float renderRot;
-
 
     InterpolatedEntity() : lastUpdateTime(0), renderRot(0) {}
 
@@ -43,14 +45,15 @@ class GameplayScene : public Scene {
     std::unique_ptr<VirtualJoystick> leftStick;
     std::unique_ptr<VirtualJoystick> rightStick;
 
-
 public:
     GameplayScene(GameClient* g);
     virtual ~GameplayScene() = default;
 
     void Enter() override;
     void Exit() override;
-    void OnPacketReceived(const uint8_t* data, size_t size) override;
+
+    void OnMessage(Message::Shared msg) override;
+
     void Update(float dt) override;
     void Draw() override;
     void DrawGUI() override;

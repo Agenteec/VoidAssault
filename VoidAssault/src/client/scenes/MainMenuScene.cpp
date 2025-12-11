@@ -6,6 +6,7 @@
 #include <cstring>
 #include <string>
 #include <thread>
+#include <chrono>
 
 enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
 static MenuState currentState = STATE_MAIN;
@@ -42,13 +43,13 @@ void MainMenuScene::Draw() {
         float btnW = 300; float btnH = 50; float spacing = 70;
 
         if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
-            std::thread([this]() {
+            //std::thread([this]() {
                 int realPort = game->StartHost(7777);
                 if (realPort > 0) {
-                    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                    game->network.Connect("127.0.0.1", realPort);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+                    game->netClient->connect("127.0.0.1", realPort);
                 }
-                }).detach();
+                //}).detach();
         }
 
         if (GuiButton({ cx - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
@@ -76,7 +77,7 @@ void MainMenuScene::Draw() {
         float panelY = 270;
         GuiGroupBox({ cx - 250, panelY, 500, 300 }, mpTab == 0 ? "Join Server" : "Create Server");
 
-        if (mpTab == 0) { // JOIN
+        if (mpTab == 0) {
             float inY = panelY + 40;
             GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
             if (GuiTextBox({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp)) editIp = !editIp;
@@ -88,33 +89,32 @@ void MainMenuScene::Draw() {
                 ConfigManager::GetClient().lastIp = ipBuffer;
                 ConfigManager::GetClient().lastPort = atoi(portBuffer);
                 ConfigManager::Save();
-                game->network.Connect(ipBuffer, atoi(portBuffer));
+                game->netClient->connect(ipBuffer, atoi(portBuffer));
             }
 
-            // Favorites list
             GuiLabel({ cx - 200, inY + 120, 200, 20 }, "Favorites:");
             auto& favs = ConfigManager::GetClient().favoriteServers;
             for (size_t i = 0; i < favs.size() && i < 3; i++) {
                 std::string label = favs[i].name + " (" + favs[i].ip + ")";
                 if (GuiButton({ cx - 200, inY + 145 + (i * 35.0f), 400, 30 }, label.c_str())) {
-                    game->network.Connect(favs[i].ip, favs[i].port);
+                    game->netClient->connect(favs[i].ip, favs[i].port);
                 }
             }
         }
-        else { // HOST
+        else {
             float inY = panelY + 80;
             GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
             if (GuiTextBox({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort)) editPort = !editPort;
 
             if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
                 int port = atoi(portBuffer);
-                std::thread([this, port]() {
-                    int p = game->StartHost(port);
-                    if (p > 0) {
-                        std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                        game->network.Connect("127.0.0.1", p);
-                    }
-                    }).detach();
+
+                int p = game->StartHost(port);
+                if (p > 0) {
+                    //std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+                    game->netClient->connect("127.0.0.1", p);
+                }
             }
         }
 

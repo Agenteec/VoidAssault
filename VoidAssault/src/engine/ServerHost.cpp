@@ -1,11 +1,13 @@
 ﻿#define _CRT_SECURE_NO_WARNINGS
 #include "ServerHost.h"
+#include "../common/NetworkPackets.h"
 #include <iostream>
-#include <cstring>
 #include <chrono>
-#include <thread>
 
-ServerHost::ServerHost() : running(false) {}
+ServerHost::ServerHost() : running(false) {
+    // Выделяем память под сервер
+    netServer = ENetServer::alloc();
+}
 
 ServerHost::~ServerHost() {
     Stop();
@@ -14,28 +16,15 @@ ServerHost::~ServerHost() {
 bool ServerHost::Start(int port) {
     if (running) return false;
 
-    if (enet_initialize() != 0) {
-        std::cerr << "SERVER: ENet init failed.\n";
+    // Запуск через обертку
+    if (!netServer->start(port)) {
+        std::cerr << "SERVER: Failed to start on port " << port << std::endl;
         return false;
     }
 
-    ENetAddress address;
-    memset(&address, 0, sizeof(address));
-    address.host = ENET_HOST_ANY;
-    address.port = (enet_uint16)port;
-
-    server = enet_host_create(&address, 32, 2, 0, 0);
-
-    if (!server) {
-        std::cerr << "SERVER: Failed to bind port " << port << "!\n";
-        return false;
-    }
-
-    std::cout << "SERVER: Started on port " << port << "\n";
-
+    std::cout << "SERVER: Started on port " << port << std::endl;
     running = true;
     serverThread = std::thread(&ServerHost::ServerLoop, this);
-
     return true;
 }
 
@@ -44,87 +33,119 @@ void ServerHost::Stop() {
     if (serverThread.joinable()) {
         serverThread.join();
     }
-    if (server) {
-        enet_host_destroy(server);
-        server = nullptr;
-    }
+    // Остановка обертки
+    netServer->stop();
 }
 
 void ServerHost::ServerLoop() {
-    std::cout << "SERVER: Event loop running.\n";
-
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     double accumulator = 0.0;
     const double dt = 1.0 / 60.0;
+    double snapshotTimer = 0.0;
 
-    while (running) {
+    while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
         std::chrono::duration<double> frameTime = currentTime - lastTime;
         lastTime = currentTime;
         accumulator += frameTime.count();
+        snapshotTimer += frameTime.count();
 
-        ENetEvent event;
-        while (enet_host_service(server, &event, 15) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT: {
-                std::cout << "SERVER: Client connected.\n";
+        // 1. Обработка входящих сообщений
+        auto msgs = netServer->poll();
 
-                auto player = gameScene.CreatePlayer();
-                event.peer->data = (void*)(uintptr_t)player->id;
+        for (auto& msg : msgs) {
+            uint32_t peerId = msg->peerId();
 
-                InitPacket initPkt;
-                initPkt.type = PacketType::server_INIT;
-                initPkt.yourPlayerId = player->id;
+            if (msg->type() == MessageType::CONNECT) {
+                std::cout << "SERVER: Client " << peerId << " connected.\n";
 
-                ENetPacket* packet = enet_packet_create(&initPkt, sizeof(InitPacket), ENET_PACKET_FLAG_RELIABLE);
-                enet_peer_send(event.peer, 0, packet);
+                // Создаем игрока, используя ID пира
+                // (Придется доработать CreatePlayer в GameScene, см. ниже, 
+                // или просто передадим этот ID)
+                auto player = gameScene.CreatePlayerWithId(peerId);
 
-                enet_host_flush(server);
-                break;
+                // Отправляем INIT пакет
+                auto stream = StreamBuffer::alloc();
+                stream->write((uint8_t)GamePacket::INIT);
+                stream->write(player->id);
+
+                // Шлем надежно конкретному клиенту
+                netServer->send(peerId, DeliveryType::RELIABLE, stream);
             }
-            case ENET_EVENT_TYPE_RECEIVE: {
-                if (event.packet->dataLength >= sizeof(PacketHeader)) {
-                    PacketHeader* header = (PacketHeader*)event.packet->data;
-                    if (header->type == PacketType::client_INPUT) {
-                        PlayerInputPacket* input = (PlayerInputPacket*)event.packet->data;
-                        uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
+            else if (msg->type() == MessageType::DISCONNECT) {
+                std::cout << "SERVER: Client " << peerId << " disconnected.\n";
+                // Удаляем игрока
+                gameScene.objects.erase(peerId);
+            }
+            else if (msg->type() == MessageType::DATA) {
+                // Читаем Payload
+                auto stream = msg->stream();
+                uint8_t packetType = 0;
+                stream->read(packetType);
 
-                        if (gameScene.objects.count(playerId)) {
-                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[playerId]);
-                            if (p) {
-                                p->ApplyInput(input->movement);
-                                p->aimTarget = input->aimTarget;
-                                p->wantsToShoot = input->isShooting;
-                            }
+                if (packetType == GamePacket::INPUT) {
+                    PlayerInputPacket input;
+                    stream >> input; // Десериализация
+
+                    if (gameScene.objects.count(peerId)) {
+                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                        if (p) {
+                            p->ApplyInput(input.movement);
+                            p->aimTarget = input.aimTarget;
+                            p->wantsToShoot = input.isShooting;
                         }
                     }
                 }
-                enet_packet_destroy(event.packet);
-                break;
-            }
-            case ENET_EVENT_TYPE_DISCONNECT:
-                if (event.peer->data) {
-                    uint32_t playerId = (uint32_t)(uintptr_t)event.peer->data;
-                    gameScene.objects.erase(playerId);
-                }
-                std::cout << "SERVER: Client disconnected.\n";
-                break;
             }
         }
 
+        // 2. Обновление мира
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
         }
 
-        static double snapshotTimer = 0;
-        snapshotTimer += frameTime.count();
-        if (snapshotTimer > 0.05) {
+        // 3. Рассылка состояния (Snapshot) - 20 раз в секунду
+        if (snapshotTimer >= 0.05) {
+            BroadcastSnapshot();
             snapshotTimer = 0;
-            auto data = gameScene.SerializeSnapshot();
-            ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_UNSEQUENCED);
-            enet_host_broadcast(server, 1, packet);
         }
+
+        // Разгрузка CPU
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+}
+
+void ServerHost::BroadcastSnapshot() {
+    if (netServer->numClients() == 0) return;
+
+    auto stream = StreamBuffer::alloc(4096); // Буфер побольше
+
+    stream->write((uint8_t)GamePacket::SNAPSHOT);
+    stream->write((uint32_t)gameScene.objects.size());
+
+    for (auto& [id, obj] : gameScene.objects) {
+        EntityState state;
+        state.id = obj->id;
+
+        if (obj->body) {
+            state.position = ToRay(cpBodyGetPosition(obj->body));
+            state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
+        }
+        else {
+            state.position = { 0,0 };
+            state.rotation = 0;
+        }
+
+        state.health = obj->health;
+        state.maxHealth = obj->maxHealth;
+        state.type = obj->type;
+        state.radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
+        state.color = obj->color;
+
+        stream << state;
+    }
+
+    netServer->broadcast(DeliveryType::UNRELIABLE, stream);
 }
