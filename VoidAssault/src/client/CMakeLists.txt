@@ -35,6 +35,7 @@ elseif(ANDROID)
     target_include_directories(gameclient PRIVATE ${ENET_EXTERNAL_INCLUDE_DIR})
     target_include_directories(gameclient PRIVATE ${RAYGUI_EXTERNAL_INCLUDE_DIR})
     target_include_directories(gameclient PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
+    target_include_directories(gameclient PUBLIC ${RAYMOB_EXTERNAL_INCLUDE_DIR})
 
 target_include_directories(gameclient PUBLIC "${CMAKE_SOURCE_DIR}/external")
 endif()

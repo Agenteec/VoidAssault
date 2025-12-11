@@ -48,6 +48,8 @@ if(ANDROID)
     add_subdirectory(external/raymob)
 endif()
 
+set(RAYMOB_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/raymob")
+
 set(RAYGUI_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/raygui")
 set(FIX_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/fix")
 set(ENET_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/enet/include")
