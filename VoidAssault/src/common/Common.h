@@ -1,5 +1,5 @@
 ﻿#pragma once
-#include "external/fix_win32_compatibility.h"
+#include "fix_win32_compatibility.h"
 #include <ctime>
 #include <string>
 #include <sstream>

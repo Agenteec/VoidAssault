@@ -1,8 +1,7 @@
 ﻿#pragma once
-#include "external/fix_win32_compatibility.h"
 #include <vector>
 #include <memory>
-#include "net/Message.h" // Подключаем Message из примера
+#include "net/Message.h"
 
 class GameClient;
 

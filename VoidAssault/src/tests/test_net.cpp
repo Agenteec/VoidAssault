@@ -1,5 +1,4 @@
 ﻿#define _CRT_SECURE_NO_WARNINGS
-#include "external/fix_win32_compatibility.h"
 
 #include <iostream>
 #include <thread>
