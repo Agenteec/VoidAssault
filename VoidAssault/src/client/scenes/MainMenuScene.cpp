@@ -116,9 +116,7 @@ void MainMenuScene::DrawGUI() {
     }
     else if (currentState == MenuState::MULTIPLAYER) {
         float panelW = 600;
-        // Уменьшаем высоту панели (было 520 -> стало 440), места хватит с запасом
         float panelH = 440;
-        // Поднимаем панель выше (было 130 -> стало 100)
         float panelY = 100;
 
         Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
