@@ -10,3 +10,6 @@
 [submodule "VoidAssault/external/json"]
 	path = VoidAssault/external/json
 	url = https://github.com/nlohmann/json.git
+[submodule "VoidAssault/external/bitsery"]
+	path = VoidAssault/external/bitsery
+	url = https://github.com/fraillt/bitsery.git
