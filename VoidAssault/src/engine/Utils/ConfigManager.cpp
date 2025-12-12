@@ -112,6 +112,23 @@ const char* ConfigManager::Text(const std::string& key) {
     if (localizedStrings.count(key)) return localizedStrings[key].c_str();
     return key.c_str();
 }
+
+std::string ConfigManager::GetCurrentLangName()
+{
+    if (localizedStrings.count("lang_name")) return localizedStrings["lang_name"];
+    return config.client.language;
+}
+void ConfigManager::CycleLanguage()
+{
+    if (config.client.language == "en") {
+        config.client.language = "ru";
+    }
+    else {
+        config.client.language = "en";
+    }
+    LoadLanguage(config.client.language);
+    Save();
+}
 ClientConfig& ConfigManager::GetClient() { return config.client; }
 ServerConfig& ConfigManager::GetServer() { return config.server; }
 Font ConfigManager::GetFont() { return mainFont; }

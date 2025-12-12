@@ -3,47 +3,44 @@
 #include "raygui_wrapper.h"
 #include "../GameClient.h"
 #include "engine/Utils/ConfigManager.h"
+#include "../ResourceManager.h" 
+#include "../Theme.h"          
 #include <cstring>
 #include <string>
 #include <thread>
 #include <chrono>
 
-
-
-enum MenuState { STATE_MAIN, STATE_MULTIPLAYER, STATE_SETTINGS };
-static MenuState currentState = STATE_MAIN;
-
-static int mpTab = 0;
-static char ipBuffer[64] = "";
-static char portBuffer[16] = "";
-static char nameBuffer[32] = "";
-
-static bool editIp = false;
-static bool editPort = false;
-static bool editName = false;
-
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
 
 void MainMenuScene::Enter() {
+    Theme::ApplyTheme();
+    ResourceManager::Get().Load();
+
     ClientConfig& cfg = ConfigManager::GetClient();
     strcpy(ipBuffer, cfg.lastIp.c_str());
     sprintf(portBuffer, "%d", cfg.lastPort);
     strcpy(nameBuffer, cfg.playerName.c_str());
 
-    currentState = STATE_MAIN;
-
+    currentState = MenuState::MAIN;
     virtualKeyboard.Hide();
-    editIp = false;
-    editPort = false;
-    editName = false;
 }
 
-bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode, InGameKeyboard& kbd) {
+void MainMenuScene::Exit() {
+    ClientConfig& cfg = ConfigManager::GetClient();
+    cfg.playerName = nameBuffer;
+    cfg.lastIp = ipBuffer;
+    cfg.lastPort = atoi(portBuffer);
+    ConfigManager::Save();
+}
+
+void MainMenuScene::Update(float dt) {
+    ResourceManager::Get().UpdateBackground(dt);
+}
+
+bool MainMenuScene::DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode) {
 #if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(__ANDROID__)
     if (GuiTextBox(bounds, buffer, bufferSize, false)) {
-        if (!kbd.IsActive()) {
-            kbd.Show(buffer, bufferSize);
-        }
+        if (!virtualKeyboard.IsActive()) virtualKeyboard.Show(buffer, bufferSize);
     }
     return false;
 #else
@@ -56,26 +53,41 @@ bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMo
 }
 
 void MainMenuScene::Draw() {
-    ClearBackground(GetColor(0x181818FF));
+    ResourceManager::Get().DrawBackground();
+
     int w = GetScreenWidth();
     int h = GetScreenHeight();
     float cx = w / 2.0f;
 
-    bool kbdActive = virtualKeyboard.IsActive();
-    if (kbdActive) {
-        GuiDisable();
-    }
-
-    const char* title = "VOID ASSAULT";
-    int fontSize = 60;
-#if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(__ANDROID__)
-    fontSize = 80;
+    const char* title = ConfigManager::Text("title_void_assault");
+    int fontSize = (h < 500) ? 40 : 60;
+#if defined(PLATFORM_ANDROID)
+    fontSize = 70;
 #endif
-    DrawText(title, cx - MeasureText(title, fontSize) / 2, 50, fontSize, WHITE);
 
-    if (currentState == STATE_MAIN) {
-        float startY = 200;
-        float btnW = 300; float btnH = 50; float spacing = 70;
+    Font font = ConfigManager::GetFont();
+    Vector2 titleSize = MeasureTextEx(font, title, (float)fontSize, 2);
+    DrawTextEx(font, title, { cx - titleSize.x / 2 + 4, 64 }, (float)fontSize, 2, Fade(BLACK, 0.5f));
+    DrawTextEx(font, title, { cx - titleSize.x / 2, 60 }, (float)fontSize, 2, Theme::COL_ACCENT);
+}
+
+void MainMenuScene::DrawGUI() {
+    int w = GetScreenWidth();
+    int h = GetScreenHeight();
+    float cx = w / 2.0f;
+    Font font = ConfigManager::GetFont();
+
+    bool kbdActive = virtualKeyboard.IsActive();
+    if (kbdActive) GuiDisable();
+
+    if (currentState == MenuState::MAIN) {
+        float startY = 220;
+        float btnW = 320;
+        float btnH = 50;
+        float spacing = 20;
+
+        Rectangle menuRect = { cx - btnW / 2 - 20, startY - 20, btnW + 40, (btnH + spacing) * 4 + 40 };
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.0.2", font);
 
         if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
             std::thread([this]() {
@@ -86,116 +98,128 @@ void MainMenuScene::Draw() {
                 }
                 }).detach();
         }
+        startY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY + spacing, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
-            currentState = STATE_MULTIPLAYER;
+        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
+            currentState = MenuState::MULTIPLAYER;
         }
+        startY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY + spacing * 2, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
-            currentState = STATE_SETTINGS;
+        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
+            currentState = MenuState::SETTINGS;
         }
+        startY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY + spacing * 3, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
+        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
             CloseWindow();
         }
     }
-    else if (currentState == STATE_MULTIPLAYER) {
-        float nameY = 130;
-        GuiLabel({ cx - 150, nameY, 300, 20 }, "Nickname:");
+    else if (currentState == MenuState::MULTIPLAYER) {
+        float panelW = 600;
+        // Уменьшаем высоту панели (было 520 -> стало 440), места хватит с запасом
+        float panelH = 440;
+        // Поднимаем панель выше (было 130 -> стало 100)
+        float panelY = 100;
+
+        Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
+        ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_multiplayer"), font);
+
+        float contentX = panelRect.x + 40;
+        float contentY = panelRect.y + 45;
+        float contentW = panelW - 80;
+
+        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_nickname"));
+        contentY += 20;
+        DrawInputField({ contentX, contentY, contentW, 30 }, nameBuffer, 32, isEditingName);
+        if (!isEditingName && !kbdActive) ConfigManager::GetClient().playerName = nameBuffer;
+
+        contentY += 40;
 
 
-        DrawInputField({ cx - 150, nameY + 20, 300, 30 }, nameBuffer, 32, editName, virtualKeyboard);
+        GuiToggleGroup({ contentX, contentY, contentW/2, 40 }, ConfigManager::Text("tabs_multiplayer"), &activeMpTab);
+        contentY += 50;
 
-        if (!editName && !kbdActive) {
-            ConfigManager::GetClient().playerName = nameBuffer;
-        }
+        if (activeMpTab == 0) {
 
-        GuiToggleGroup({ cx - 200, 210, 200, 40 }, "JOIN GAME;HOST GAME", &mpTab);
+            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_ip"));
+            contentY += 20;
+            DrawInputField({ contentX, contentY, contentW, 30 }, ipBuffer, 64, isEditingIp);
+            contentY += 35;
 
-        float panelY = 270;
-        GuiGroupBox({ cx - 250, panelY, 500, 300 }, mpTab == 0 ? "Join Server" : "Create Server");
+            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_port"));
+            contentY += 20;
+            DrawInputField({ contentX, contentY, 100, 30 }, portBuffer, 16, isEditingPort);
+            contentY += 45;
 
-        if (mpTab == 0) {
-            float inY = panelY + 40;
-
-            GuiLabel({ cx - 200, inY, 50, 30 }, "IP:");
-            DrawInputField({ cx - 150, inY, 200, 30 }, ipBuffer, 64, editIp, virtualKeyboard);
-
-            GuiLabel({ cx + 60, inY, 50, 30 }, "Port:");
-            DrawInputField({ cx + 100, inY, 80, 30 }, portBuffer, 16, editPort, virtualKeyboard);
-
-            if (GuiButton({ cx - 100, inY + 60, 200, 40 }, "CONNECT")) {
+            if (GuiButton({ contentX, contentY, contentW, 40 }, ConfigManager::Text("btn_join"))) {
                 ConfigManager::GetClient().lastIp = ipBuffer;
                 ConfigManager::GetClient().lastPort = atoi(portBuffer);
                 ConfigManager::Save();
                 game->netClient->connect(ipBuffer, atoi(portBuffer));
             }
-
-            GuiLabel({ cx - 200, inY + 120, 200, 20 }, "Favorites:");
-            auto& favs = ConfigManager::GetClient().favoriteServers;
-            for (size_t i = 0; i < favs.size() && i < 3; i++) {
-                std::string label = favs[i].name + " (" + favs[i].ip + ")";
-                if (GuiButton({ cx - 200, inY + 145 + (i * 35.0f), 400, 30 }, label.c_str())) {
-                    game->netClient->connect(favs[i].ip, favs[i].port);
-                }
-            }
         }
         else {
-            float inY = panelY + 80;
-            GuiLabel({ cx - 100, inY, 200, 20 }, "Local Port:");
+            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_port"));
+            contentY += 20;
+            DrawInputField({ contentX, contentY, 100, 30 }, portBuffer, 16, isEditingPort);
+            contentY += 45;
 
-            DrawInputField({ cx - 50, inY + 25, 100, 30 }, portBuffer, 16, editPort, virtualKeyboard);
-
-            if (GuiButton({ cx - 120, inY + 80, 240, 50 }, "START HOST & PLAY")) {
+            if (GuiButton({ contentX, contentY, contentW, 40 }, ConfigManager::Text("btn_create_lobby"))) {
                 int port = atoi(portBuffer);
                 int p = game->StartHost(port);
-                if (p > 0) {
-                    game->netClient->connect("127.0.0.1", p);
-                }
+                if (p > 0) game->netClient->connect("127.0.0.1", p);
             }
         }
 
-        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
-            currentState = STATE_MAIN;
+        float backBtnY = panelRect.y + panelRect.height + 15;
+        if (backBtnY + 40 > GetScreenHeight()) {
+            backBtnY = GetScreenHeight() - 50.0f;
+        }
+
+        if (GuiButton({ cx - 100, backBtnY, 200, 40 }, ConfigManager::Text("btn_back"))) {
+            currentState = MenuState::MAIN;
         }
     }
-    else if (currentState == STATE_SETTINGS) {
-        float startY = 200;
-        GuiLabel({ cx - 150, startY, 300, 20 }, "Master Volume");
+    else if (currentState == MenuState::SETTINGS) {
+        float panelW = 400;
+        float panelH = 350;
+        float panelY = h / 2.0f - panelH / 2.0f;
+
+        Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
+        ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_settings"), font);
+
+        float contentX = panelRect.x + 30;
+        float contentY = panelRect.y + 50;
+        float contentW = panelW - 60;
+
+        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_master_vol"));
+        contentY += 25;
         float vol = game->audio.GetVolume();
-        if (GuiSlider({ cx - 150, startY + 25, 300, 30 }, "0", "1", &vol, 0, 1)) {
+        if (GuiSlider({ contentX, contentY, contentW, 30 }, "0%", "100%", &vol, 0.0f, 1.0f)) {
             game->audio.SetVolume(vol);
         }
+        contentY += 60;
 
-        startY += 80;
-#if !defined(PLATFORM_ANDROID) && !defined(ANDROID) && !defined(__ANDROID__)
-        if (GuiButton({ cx - 150, startY, 300, 40 }, "Toggle Fullscreen")) {
-            ToggleFullscreen();
+        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_language"));
+        contentY += 25;
+        std::string langBtnText = "< " + ConfigManager::GetCurrentLangName() + " >";
+        if (GuiButton({ contentX, contentY, contentW, 40 }, langBtnText.c_str())) {
+            ConfigManager::CycleLanguage();
         }
-#endif
+        contentY += 60;
 
-        if (GuiButton({ 30, (float)h - 70, 120, 40 }, "BACK")) {
-            currentState = STATE_MAIN;
+        if (GuiButton({ cx - 100, panelRect.y + panelRect.height + 20, 200, 40 }, ConfigManager::Text("btn_back"))) {
+            game->ReturnToMenu();
+            currentState = MenuState::MAIN;
         }
     }
 
     if (kbdActive) {
         GuiEnable();
-
         DrawRectangle(0, 0, w, h, Fade(BLACK, 0.7f));
-
         virtualKeyboard.Draw();
-
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
-            float safeZoneY = (float)h * 0.4f;
-            if (GetMouseY() < safeZoneY) {
-                virtualKeyboard.Hide();
-
-                ConfigManager::GetClient().playerName = nameBuffer;
-                ConfigManager::GetClient().lastIp = ipBuffer;
-                ConfigManager::GetClient().lastPort = atoi(portBuffer);
-                ConfigManager::Save();
-            }
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && GetMouseY() < h * 0.4f) {
+            virtualKeyboard.Hide();
         }
     }
 }

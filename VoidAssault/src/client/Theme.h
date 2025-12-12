@@ -1,15 +1,26 @@
-#pragma once
+﻿#pragma once
 #include "raylib.h"
+#include "raygui.h"
 
 namespace Theme {
-    static const Color BG_COLOR = { 205, 205, 205, 255 };
-    static const Color GRID_COLOR = { 170, 170, 170, 255 };
-    static const Color BORDER_COLOR = { 85, 85, 85, 255 };
+   
+    static const Color COL_BACKGROUND = { 10, 10, 20, 255 };
+    static const Color COL_PANEL = { 20, 30, 45, 230 };
+    static const Color COL_ACCENT = { 0, 240, 255, 255 };
+    static const Color COL_ACCENT_DIM = { 0, 120, 130, 255 };
+    static const Color COL_TEXT = { 240, 240, 255, 255 };
+    static const Color COL_WARNING = { 255, 60, 60, 255 };
 
-    static const Color COLOR_BLUE = { 0, 178, 225, 255 };
-    static const Color COLOR_RED = { 241, 78, 84, 255 };
-    static const Color COLOR_BARREL = { 153, 153, 153, 255 };
 
-    static const float OUTLINE_THICKNESS = 3.0f;
-    static const float BARREL_WIDTH_RATIO = 0.45f;
+    inline void ApplyTheme() {
+        GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0x141e2dff);
+        GuiSetStyle(DEFAULT, LINE_COLOR, 0x00f0ffff);
+        GuiSetStyle(DEFAULT, TEXT_COLOR_NORMAL, 0xf0f0ffff);
+        GuiSetStyle(DEFAULT, TEXT_COLOR_FOCUSED, 0x00f0ffff);
+        GuiSetStyle(DEFAULT, TEXT_COLOR_PRESSED, 0xffffffff);
+        GuiSetStyle(DEFAULT, BASE_COLOR_NORMAL, 0x141e2dff);
+        GuiSetStyle(DEFAULT, BASE_COLOR_FOCUSED, 0x20354dff);
+        GuiSetStyle(DEFAULT, BASE_COLOR_PRESSED, 0x00707fff);
+        GuiSetStyle(DEFAULT, BORDER_WIDTH, 2);
+    }
 }

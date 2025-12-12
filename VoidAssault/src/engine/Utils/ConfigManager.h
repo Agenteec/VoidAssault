@@ -51,6 +51,9 @@ private:
     static void CreateDefaultConfig();
 
 public:
+    static void CycleLanguage();
+
+    static std::string GetCurrentLangName();
     static void Initialize(const std::string& savePath);
     static void Save();
     static void Load();

@@ -1,39 +1,23 @@
 ﻿{
+  "lang_name": "English",
   "title_void_assault": "VOID ASSAULT",
-
-  "lbl_player_setup": "Player Setup",
-  "lbl_nickname": "Nickname:",
-  "lbl_connection": "Connection Settings",
-  "lbl_server_setup": "Server Settings",
-
-  "tabs_multiplayer": "Join Game;Host Server",
-
-  "btn_join": "CONNECT",
-  "btn_create_lobby": "CREATE LOBBY",
-  "btn_settings": "SETTINGS",
-  "btn_singleplayer": "SINGLEPLAYER",
-  "btn_multiplayer": "MULTIPLAYER",
-  "btn_exit": "EXIT",
-  "btn_back": "BACK",
-  "btn_save": "SAVE",
-
-  "lbl_ip": "IP Address:",
-  "lbl_port": "Port:",
-
-  "header_audio": "Audio",
-  "header_graphics": "Graphics",
-  "lbl_master_vol": "Master Volume:",
-  "lbl_music_vol": "Music Volume:",
-  "lbl_sfx_vol": "SFX Volume:",
-  "lbl_fullscreen": "Fullscreen:",
-  "lbl_language": "Language:",
-
-  "game_wave": "Wave:",
-  "game_score": "Score:",
-  "game_resources": "Resources:",
-  "game_reactor": "Reactor Integrity:",
-
-  "msg_connecting": "Connecting...",
-  "msg_failed": "Connection Failed",
-  "msg_waiting": "Waiting for host..."
+  "lbl_player_setup": "ID CARD",
+  "lbl_nickname": "CALLSIGN:",
+  "tabs_multiplayer": "JOIN;HOST",
+  "btn_join": "INITIALIZE LINK",
+  "btn_create_lobby": "DEPLOY SERVER",
+  "btn_settings": "SYSTEM CONFIG",
+  "btn_singleplayer": "SOLO MISSION",
+  "btn_multiplayer": "NET PROTOCOL",
+  "btn_exit": "TERMINATE",
+  "btn_back": "ABORT",
+  "btn_save": "COMMIT",
+  "lbl_ip": "TARGET IP:",
+  "lbl_port": "PORT:",
+  "header_audio": "AUDIO SYSTEMS",
+  "header_graphics": "VISUAL SYSTEMS",
+  "lbl_master_vol": "MASTER GAIN",
+  "lbl_language": "LANGUAGE / ЯЗЫК",
+  "msg_connecting": "ESTABLISHING CONNECTION...",
+  "msg_waiting": "AWAITING HOST..."
 }
