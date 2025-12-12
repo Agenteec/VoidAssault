@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <cmath>
 
 #if defined(ANDROID) || defined(PLATFORM_ANDROID) || defined(__ANDROID__)
 #define IS_MOBILE_PLATFORM
@@ -15,15 +16,15 @@ private:
     bool active = false;
     char* targetBuffer = nullptr;
     int maxLen = 0;
-    
-    bool isShift = false;
+
+    bool isCaps = false;
     bool isSymbols = false;
     int cursorIndex = 0;
     int frameCounter = 0;
 
 
     const std::string rowNumbers = "1234567890";
-    
+
     const std::vector<std::string> rowsAlphaLower = {
         "qwertyuiop",
         "asdfghjkl",
@@ -36,13 +37,13 @@ private:
         "ZXCVBNM."
     };
 
+
     const std::vector<std::string> rowsSymbols = {
         "1234567890",
-        "!@#$%^&*()",
+        "!@#$%^&*()", 
         "-=_+[]{}\\|",
         ";:'\",.<>/?"
     };
-
 #endif
 
 public:
@@ -51,7 +52,7 @@ public:
         targetBuffer = buffer;
         maxLen = bufferSize;
         active = true;
-        isShift = false;
+        isCaps = false;
         isSymbols = false;
         cursorIndex = (targetBuffer) ? (int)strlen(targetBuffer) : 0;
 #endif
@@ -82,70 +83,104 @@ public:
         float kbdH = screenH * 0.45f;
         float startY = screenH - kbdH;
 
-        float previewH = 50.0f;
+ 
+        float previewH = 60.0f;
         float previewY = startY - previewH;
 
         DrawRectangle(0, (int)previewY, screenW, (int)(kbdH + previewH), Fade(GetColor(0x202020FF), 0.98f));
         DrawLine(0, (int)previewY, screenW, (int)previewY, GRAY);
 
         Rectangle previewRect = { 0, previewY, (float)screenW, previewH };
+
+        int oldAlign = GuiGetStyle(TEXTBOX, TEXT_ALIGNMENT);
         GuiSetStyle(TEXTBOX, TEXT_ALIGNMENT, TEXT_ALIGN_LEFT);
-        
-        GuiTextBox(previewRect, targetBuffer, maxLen, true);
-        
+
+        GuiTextBox(previewRect, targetBuffer, maxLen, false);
+
+        GuiSetStyle(TEXTBOX, TEXT_ALIGNMENT, oldAlign);
 
         if (targetBuffer) {
+            Font font = GuiGetFont();
+            int fontSize = GuiGetStyle(DEFAULT, TEXT_SIZE);
+            int fontSpacing = GuiGetStyle(DEFAULT, TEXT_SPACING);
+            int textPadding = GuiGetStyle(TEXTBOX, TEXT_PADDING);
 
             char tempC = targetBuffer[cursorIndex];
             targetBuffer[cursorIndex] = '\0';
-            int textWidth = MeasureText(targetBuffer, GuiGetStyle(DEFAULT, TEXT_SIZE));
+            Vector2 size = MeasureTextEx(font, targetBuffer, (float)fontSize, (float)fontSpacing);
             targetBuffer[cursorIndex] = tempC;
 
-            int textPadding = GuiGetStyle(TEXTBOX, TEXT_PADDING);
-            int cursorX = (int)previewRect.x + textPadding + textWidth + 2;
-            int cursorY = (int)previewRect.y + (int)previewH / 2 - 10;
+            int cursorX = (int)previewRect.x + textPadding + (int)size.x + 2;
+            int cursorY = (int)previewRect.y + (int)previewH / 2 - fontSize / 2;
 
             frameCounter++;
             if ((frameCounter / 30) % 2 == 0) {
-                DrawRectangle(cursorX, cursorY, 2, 20, RED);
+                DrawRectangle(cursorX, cursorY, 2, fontSize, RED);
+            }
+
+            if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON) && CheckCollisionPointRec(GetMousePosition(), previewRect)) {
+                float clickLocalX = GetMousePosition().x - (previewRect.x + textPadding);
+
+                int bestIndex = 0;
+                float minDiff = 9999.0f;
+                int len = (int)strlen(targetBuffer);
+
+                for (int i = 0; i <= len; i++) {
+                    char tmp = targetBuffer[i];
+                    targetBuffer[i] = '\0';
+                    Vector2 width = MeasureTextEx(font, targetBuffer, (float)fontSize, (float)fontSpacing);
+                    targetBuffer[i] = tmp;
+
+                    float diff = std::abs(width.x - clickLocalX);
+                    if (diff < minDiff) {
+                        minDiff = diff;
+                        bestIndex = i;
+                    }
+                }
+                cursorIndex = bestIndex;
             }
         }
 
         float padding = 4.0f;
-        
-        int totalRows = 4;
-        if (isSymbols) totalRows = 4;
+        int totalRows = 4; 
 
         float rowHeight = (kbdH - (padding * (totalRows + 2))) / (totalRows + 1);
 
         for (int r = 0; r < totalRows; r++) {
             std::string rowStr;
-            
+
             if (isSymbols) {
                 rowStr = rowsSymbols[r];
-            } else {
+            }
+            else {
                 if (r == 0) rowStr = rowNumbers;
-                else rowStr = (isShift ? rowsAlphaUpper : rowsAlphaLower)[r - 1];
+                else rowStr = (isCaps ? rowsAlphaUpper : rowsAlphaLower)[r - 1];
             }
 
             int numKeys = (int)rowStr.length();
-            
+
             float availableWidth = screenW;
-            if (r == 0 && !isSymbols) availableWidth -= (rowHeight * 1.5f + padding); 
+            if (r == 0) availableWidth -= (rowHeight * 1.6f + padding * 2);
 
             float keyWidth = (availableWidth - (padding * (numKeys + 1))) / (float)numKeys;
-            if (keyWidth > rowHeight * 1.4f) keyWidth = rowHeight * 1.4f;
+
+            float maxKeyW = rowHeight * 1.3f;
+            if (keyWidth > maxKeyW) keyWidth = maxKeyW;
 
             float rowTotalWidth = numKeys * keyWidth + (numKeys - 1) * padding;
+
             float startX = (screenW - rowTotalWidth) / 2.0f;
-            
-            if (r == 0 && !isSymbols) startX = padding;
+
+            if (r == 0) {
+                startX = (availableWidth - rowTotalWidth) / 2.0f;
+                if (startX < padding) startX = padding;
+            }
 
             for (int i = 0; i < numKeys; i++) {
                 Rectangle btnRect = {
                     startX + i * (keyWidth + padding),
                     startY + padding + r * (rowHeight + padding),
-                    keyWidth, 
+                    keyWidth,
                     rowHeight
                 };
 
@@ -156,67 +191,66 @@ public:
             }
         }
 
-
-        if (!isSymbols) {
-            float bsWidth = rowHeight * 1.5f;
-            Rectangle bsRect = { screenW - bsWidth - padding, startY + padding, bsWidth, rowHeight };
-            if (GuiButton(bsRect, "#118#")) { 
+        {
+            float bsWidth = rowHeight * 1.6f;
+            float bsX = screenW - bsWidth - padding;
+            Rectangle bsRect = { bsX, startY + padding, bsWidth, rowHeight };
+            if (GuiButton(bsRect, "#118#")) {
                 DeleteChar();
             }
         }
 
-        float bottomY = startY + padding + totalRows * (rowHeight + padding);
-        
-        float navBtnW = screenW * 0.12f;
-        float shiftBtnW = screenW * 0.15f;
-        float spaceW = screenW - (shiftBtnW + navBtnW * 2 + padding * 5);
-        
-        float cx = padding;
 
-        const char* modeLabel = isSymbols ? "ABC" : (isShift ? "#113#" : "#112#");
-        if (GuiButton({ cx, bottomY, shiftBtnW, rowHeight }, modeLabel)) {
+        float bottomY = startY + padding + totalRows * (rowHeight + padding);
+
+        float modeBtnW = screenW * 0.15f;
+        float okBtnW = screenW * 0.15f;
+        float spaceW = screenW - (modeBtnW + okBtnW + padding * 4);
+
+        float currentX = padding;
+
+        const char* modeLabel = isSymbols ? "ABC" : (isCaps ? "#113#" : "#112#");
+
+        if (GuiButton({ currentX, bottomY, modeBtnW, rowHeight }, modeLabel)) {
             if (isSymbols) {
-                isSymbols = false; 
-            } else {
-                isShift = !isShift;
+                isSymbols = false;
+            }
+            else {
+
+                isCaps = !isCaps;
             }
         }
-        cx += shiftBtnW + padding;
 
-        
-        if (!isSymbols) {
+        float btnSmallW = screenW * 0.15f;
+        float btnSpaceW = screenW - (btnSmallW * 3 + padding * 5);
 
-        }
-        
+        currentX = padding;
 
-        float btnW = screenW / 6.0f; 
-        cx = padding;
-
-        if (GuiButton({cx, bottomY, btnW, rowHeight}, isSymbols ? "ABC" : "?123")) {
+        if (GuiButton({ currentX, bottomY, btnSmallW, rowHeight }, isSymbols ? "ABC" : "?123")) {
             isSymbols = !isSymbols;
         }
-        cx += btnW + padding;
+        currentX += btnSmallW + padding;
 
-        if (GuiButton({cx, bottomY, btnW, rowHeight}, "#114#")) {
-            if (cursorIndex > 0) cursorIndex--;
+        if (!isSymbols) {
+            if (GuiButton({ currentX, bottomY, btnSmallW, rowHeight }, isCaps ? "#113#" : "#112#")) {
+                isCaps = !isCaps;
+            }
         }
-        cx += btnW + padding;
+        else {
+            
+            GuiLabel({ currentX, bottomY, btnSmallW, rowHeight }, "");
+        }
+        currentX += btnSmallW + padding;
 
-
-        if (GuiButton({cx, bottomY, btnW * 2, rowHeight}, "SPACE")) {
+        if (GuiButton({ currentX, bottomY, btnSpaceW, rowHeight }, "SPACE")) {
             InsertChar(' ');
         }
-        cx += btnW * 2 + padding;
+        currentX += btnSpaceW + padding;
 
-
-        if (GuiButton({cx, bottomY, btnW, rowHeight}, "#115#")) {
-            if (targetBuffer && cursorIndex < strlen(targetBuffer)) cursorIndex++;
-        }
-        cx += btnW + padding;
-
-        if (GuiButton({screenW - btnW - padding, bottomY, btnW, rowHeight}, "OK")) {
+        if (GuiButton({ currentX, bottomY, btnSmallW, rowHeight }, "OK")) {
             Hide();
         }
+
 #endif
     }
 
@@ -224,11 +258,12 @@ private:
 #ifdef IS_MOBILE_PLATFORM
     void InsertChar(char c) {
         if (!targetBuffer) return;
-        
+
         int len = (int)strlen(targetBuffer);
-        if (len >= maxLen - 1) return; 
+        if (len >= maxLen - 1) return;
+
         memmove(targetBuffer + cursorIndex + 1, targetBuffer + cursorIndex, len - cursorIndex + 1);
-        
+
         targetBuffer[cursorIndex] = c;
         cursorIndex++;
     }
@@ -237,9 +272,9 @@ private:
         if (!targetBuffer || cursorIndex <= 0) return;
 
         int len = (int)strlen(targetBuffer);
-        
+
         memmove(targetBuffer + cursorIndex - 1, targetBuffer + cursorIndex, len - cursorIndex + 1);
-        
+
         cursorIndex--;
     }
 #endif
