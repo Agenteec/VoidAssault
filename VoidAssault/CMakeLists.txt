@@ -29,7 +29,20 @@ if(WIN32)
     add_compile_definitions(NOMINMAX)
 
 endif()
+if(UNIX AND NOT APPLE AND NOT ANDROID)
+    add_compile_options(-fno-fast-math)
+endif()
+
 if(ANDROID)
+
+    if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
+        message(STATUS "Building for 64-bit ABI (${ANDROID_ABI}), enabling CP_USE_DOUBLES.")
+        add_definitions(-DCP_USE_DOUBLES=1)
+    else()
+        message(STATUS "Building for 32-bit ABI (${ANDROID_ABI}), double precision is disabled.")
+    endif()
+
+
     message(STATUS "Building for Android platform")
     string(REGEX MATCH "android-([0-9]+)" _ ${ANDROID_PLATFORM} FORCE)
     set(ANDROID_API_VERSION ${CMAKE_MATCH_1} CACHE STRING "" FORCE)

@@ -11,7 +11,7 @@ class GameScene {
 public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
-    uint32_t nextId = 1000; // Начинаем с 1000, чтобы не пересекаться с PeerID (0-64), хотя это не критично
+    uint32_t nextId = 1000;
     float width = 2000;
     float height = 2000;
 
@@ -28,13 +28,14 @@ public:
 
     void CreateMapBoundaries() {
         cpBody* staticBody = cpSpaceGetStaticBody(space);
-        float w = width;
-        float h = height;
+
+        float w = (width > 0) ? width : 2000;
+        float h = (height > 0) ? height : 2000;
         float thick = 20.0f;
 
         auto addWall = [&](Vector2 a, Vector2 b) {
             cpShape* wall = cpSpaceAddShape(space, cpSegmentShapeNew(staticBody, ToCp(a), ToCp(b), thick));
-            cpShapeSetElasticity(wall, 0.5f);
+            cpShapeSetElasticity(wall, 0.0f);
             cpShapeSetFriction(wall, 1.0f);
             cpShapeSetCollisionType(wall, COLLISION_WALL);
             };
@@ -45,15 +46,15 @@ public:
         addWall({ w,0 }, { w, h });
     }
 
-    // Создание игрока с конкретным ID (от ENet)
     std::shared_ptr<Player> CreatePlayerWithId(uint32_t id) {
-        Vector2 startPos = { width / 2, height / 2 };
+        Vector2 startPos = { width / 2.0f, height / 2.0f };
+
+
         auto p = std::make_shared<Player>(id, startPos, space);
         objects[id] = p;
         return p;
     }
 
-    // Обычное создание (для ботов)
     std::shared_ptr<Player> CreatePlayer() {
         return CreatePlayerWithId(nextId++);
     }
@@ -72,7 +73,6 @@ public:
                 if (p && p->spawnBulletSignal) {
                     p->spawnBulletSignal = false;
                     Vector2 spawnPos = ToRay(cpBodyGetPosition(p->body));
-                    // ID пули генерируем сами
                     auto b = std::make_shared<Bullet>(nextId++, spawnPos, p->bulletDir, p->id, space);
                     newBullets.push_back(b);
                 }
@@ -108,7 +108,10 @@ public:
 
                     if (pObj->health <= 0) {
                         pObj->health = 100;
-                        cpVect randPos = cpv(GetRandomValue(100, (int)width - 100), GetRandomValue(100, (int)height - 100));
+                        float rx = (float)(rand() % ((int)width - 200) + 100);
+                        float ry = (float)(rand() % ((int)height - 200) + 100);
+
+                        cpVect randPos = cpv(rx, ry);
                         cpBodySetPosition(pObj->body, randPos);
                         cpBodySetVelocity(pObj->body, cpvzero);
                     }

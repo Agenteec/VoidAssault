@@ -3,6 +3,19 @@
 #include "../common/NetworkPackets.h"
 #include <iostream>
 #include <chrono>
+#include <cmath>
+#include <iomanip>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <signal.h>
+#endif
+
+double GetSystemTime() {
+    static auto start = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    return diff.count();
+}
 
 ServerHost::ServerHost() : running(false) {
     netServer = ENetServer::alloc();
@@ -14,6 +27,10 @@ ServerHost::~ServerHost() {
 
 bool ServerHost::Start(int port) {
     if (running) return false;
+
+#if defined(__linux__) || defined(__APPLE__)
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     if (!netServer->start(port)) {
         std::cerr << "SERVER: Failed to start on port " << port << std::endl;
@@ -41,12 +58,37 @@ void ServerHost::ServerLoop() {
     const double dt = 1.0 / 60.0;
     double snapshotTimer = 0.0;
 
+    double debugLogTimer = 0.0;
+
+    std::cout << "SERVER: Loop started. Tick rate: " << dt << std::endl;
+
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
-        std::chrono::duration<double> frameTime = currentTime - lastTime;
+        std::chrono::duration<double> frameTimeWrapper = currentTime - lastTime;
+        double frameTime = frameTimeWrapper.count();
         lastTime = currentTime;
-        accumulator += frameTime.count();
-        snapshotTimer += frameTime.count();
+
+        if (std::isnan(frameTime) || frameTime < 0.0) {
+            frameTime = 0.001;
+            std::cerr << "WARNING: NaN frame time detected!" << std::endl;
+        }
+
+        if (frameTime > 0.25) {
+            // std::cerr << "WARNING: Lag spike detected: " << frameTime << "s" << std::endl;
+            frameTime = 0.25;
+        }
+
+        accumulator += frameTime;
+        snapshotTimer += frameTime;
+        debugLogTimer += frameTime;
+
+        if (debugLogTimer > 5.0) {
+            std::cout << "SERVER ALIVE: Time: " << GetSystemTime()
+                << " Clients: " << netServer->numClients()
+                << " Objects: " << gameScene.objects.size() << std::endl;
+            debugLogTimer = 0.0;
+        }
+
 
         auto msgs = netServer->poll();
 
@@ -89,16 +131,19 @@ void ServerHost::ServerLoop() {
                 des.value1b(packetType);
 
                 if (packetType == GamePacket::INPUT) {
-                    PlayerInputPacket input;
+                    PlayerInputPacket input = {};
                     des.object(input);
 
                     if (des.adapter().error() == bitsery::ReaderError::NoError) {
                         if (gameScene.objects.count(peerId)) {
                             auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
                             if (p) {
-                                p->ApplyInput(input.movement);
-                                p->aimTarget = input.aimTarget;
-                                p->wantsToShoot = input.isShooting;
+                              
+                                if (std::isfinite(input.movement.x) && std::isfinite(input.movement.y)) {
+                                    p->ApplyInput(input.movement);
+                                    p->aimTarget = input.aimTarget;
+                                    p->wantsToShoot = input.isShooting;
+                                }
                             }
                         }
                     }
@@ -106,9 +151,18 @@ void ServerHost::ServerLoop() {
             }
         }
 
+
+        int physicsSteps = 0;
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
+            physicsSteps++;
+
+           
+            if (physicsSteps > 5) {
+                accumulator = 0;
+                break;
+            }
         }
 
         if (snapshotTimer >= 0.05) {
@@ -124,14 +178,22 @@ void ServerHost::BroadcastSnapshot() {
     if (netServer->numClients() == 0) return;
 
     WorldSnapshotPacket snap;
-    snap.serverTime = GetTime();
+    snap.serverTime = GetSystemTime();
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
         state.id = obj->id;
 
         if (obj->body) {
-            state.position = ToRay(cpBodyGetPosition(obj->body));
+            cpVect pos = cpBodyGetPosition(obj->body);
+            if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
+                pos = cpv(0, 0);
+                cpBodySetPosition(obj->body, pos);
+                cpBodySetVelocity(obj->body, cpv(0, 0));
+                std::cerr << "WARN: Resetting body " << id << " due to NaN position" << std::endl;
+            }
+
+            state.position = ToRay(pos);
             state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
         }
         else {

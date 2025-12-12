@@ -42,6 +42,7 @@ Font LoadFont() {
 	return mainFont;
 }
 int main(int argc, char** argv){
+	srand(time(NULL));
 	if (enet_initialize() != 0) {
 		return -1;
 	}

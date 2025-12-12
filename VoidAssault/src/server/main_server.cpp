@@ -3,6 +3,7 @@
 #include <string>
 
 int main() {
+    srand(time(NULL));
     if (enet_initialize() != 0) {
         std::cerr << "An error occurred while initializing ENet.\n";
         return 1;
@@ -15,8 +16,15 @@ int main() {
 //#endif
 //
 //    ConfigManager::Initialize(configPath);
+
+
+    
+#ifdef WIN32
     InitWindow(100, 100, "ServerHeadless");
     SetWindowState(FLAG_WINDOW_HIDDEN);
+#endif // WIN32
+
+
 
     ServerHost server;
     if (server.Start(7777)) {
@@ -29,8 +37,6 @@ int main() {
 
         server.Stop();
     }
-
-    CloseWindow();
     enet_deinitialize();
     return 0;
 }

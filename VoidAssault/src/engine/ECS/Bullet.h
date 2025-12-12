@@ -15,9 +15,17 @@ public:
         color = BLACK;
         float moveSpeed = 600.0f;
 
+        if (dir.x == 0 && dir.y == 0) {
+            dir = { 1.0f, 0.0f };
+        }
+
+        Vector2 normDir = Vector2Normalize(dir);
+        if (isnan(normDir.x) || isnan(normDir.y)) {
+            normDir = { 1.0f, 0.0f };
+        }
+
         cpFloat radius = 5.0;
         cpFloat mass = 1.0;
-        // Пуля - кинематический или легкий динамический объект
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
 
         body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
@@ -28,8 +36,6 @@ public:
         cpShapeSetCollisionType(shape, COLLISION_BULLET);
         cpShapeSetUserData(shape, (void*)this);
 
-        // Задаем скорость
-        Vector2 normDir = Vector2Normalize(dir);
         cpBodySetVelocity(body, cpv(normDir.x * moveSpeed, normDir.y * moveSpeed));
     }
 
