@@ -5,23 +5,19 @@
 #include <vector>
 #include <cstring>
 #include <cmath>
-
-#if defined(ANDROID) || defined(PLATFORM_ANDROID) || defined(__ANDROID__)
+#if defined(ANDROID) || defined(PLATFORM_ANDROID) || defined(ANDROID)
 #define IS_MOBILE_PLATFORM
 #endif
-
 class InGameKeyboard {
 private:
 #ifdef IS_MOBILE_PLATFORM
-    bool active = false;
-    char* targetBuffer = nullptr;
-    int maxLen = 0;
-
+	bool active = false;
+	char* targetBuffer = nullptr;
+	int maxLen = 0;
     bool isCaps = false;
     bool isSymbols = false;
     int cursorIndex = 0;
     int frameCounter = 0;
-
 
     const std::string rowNumbers = "1234567890";
 
@@ -37,15 +33,13 @@ private:
         "ZXCVBNM."
     };
 
-
     const std::vector<std::string> rowsSymbols = {
         "1234567890",
-        "!@#$%^&*()", 
+        "!@#$%^&*()",
         "-=_+[]{}\\|",
         ";:'\",.<>/?"
     };
 #endif
-
 public:
     void Show(char* buffer, int bufferSize) {
 #ifdef IS_MOBILE_PLATFORM
@@ -57,14 +51,12 @@ public:
         cursorIndex = (targetBuffer) ? (int)strlen(targetBuffer) : 0;
 #endif
     }
-
     void Hide() {
 #ifdef IS_MOBILE_PLATFORM
         active = false;
         targetBuffer = nullptr;
 #endif
     }
-
     bool IsActive() const {
 #ifdef IS_MOBILE_PLATFORM
         return active;
@@ -72,22 +64,19 @@ public:
         return false;
 #endif
     }
-
     void Draw() {
 #ifdef IS_MOBILE_PLATFORM
         if (!active) return;
-
         int screenW = GetScreenWidth();
         int screenH = GetScreenHeight();
 
         float kbdH = screenH * 0.45f;
         float startY = screenH - kbdH;
 
- 
         float previewH = 60.0f;
         float previewY = startY - previewH;
 
-        DrawRectangle(0, (int)previewY, screenW, (int)(kbdH + previewH), Fade(GetColor(0x202020FF), 0.98f));
+        DrawRectangle(0, (int)previewY, screenW, (int)(kbdH + previewH), Fade(GetColor(0xF0F0F0FF), 0.98f));
         DrawLine(0, (int)previewY, screenW, (int)previewY, GRAY);
 
         Rectangle previewRect = { 0, previewY, (float)screenW, previewH };
@@ -142,7 +131,7 @@ public:
         }
 
         float padding = 4.0f;
-        int totalRows = 4; 
+        int totalRows = 4;
 
         float rowHeight = (kbdH - (padding * (totalRows + 2))) / (totalRows + 1);
 
@@ -158,20 +147,17 @@ public:
             }
 
             int numKeys = (int)rowStr.length();
-
             float availableWidth = screenW;
-            if (r == 0) availableWidth -= (rowHeight * 1.6f + padding * 2);
+            if (r == 0 && !isSymbols) availableWidth -= (rowHeight * 1.6f + padding * 2);
 
             float keyWidth = (availableWidth - (padding * (numKeys + 1))) / (float)numKeys;
-
-            float maxKeyW = rowHeight * 1.3f;
+            float maxKeyW = rowHeight * 1.5f;
             if (keyWidth > maxKeyW) keyWidth = maxKeyW;
 
             float rowTotalWidth = numKeys * keyWidth + (numKeys - 1) * padding;
-
             float startX = (screenW - rowTotalWidth) / 2.0f;
 
-            if (r == 0) {
+            if (r == 0 && !isSymbols) {
                 startX = (availableWidth - rowTotalWidth) / 2.0f;
                 if (startX < padding) startX = padding;
             }
@@ -191,7 +177,15 @@ public:
             }
         }
 
-        {
+        if (!isSymbols) {
+            float bsWidth = rowHeight * 1.6f;
+            float bsX = screenW - bsWidth - padding;
+            Rectangle bsRect = { bsX, startY + padding, bsWidth, rowHeight };
+            if (GuiButton(bsRect, "#118#")) {
+                DeleteChar();
+            }
+        }
+        else {
             float bsWidth = rowHeight * 1.6f;
             float bsX = screenW - bsWidth - padding;
             Rectangle bsRect = { bsX, startY + padding, bsWidth, rowHeight };
@@ -200,34 +194,15 @@ public:
             }
         }
 
-
         float bottomY = startY + padding + totalRows * (rowHeight + padding);
-
-        float modeBtnW = screenW * 0.15f;
-        float okBtnW = screenW * 0.15f;
-        float spaceW = screenW - (modeBtnW + okBtnW + padding * 4);
-
-        float currentX = padding;
-
-        const char* modeLabel = isSymbols ? "ABC" : (isCaps ? "#113#" : "#112#");
-
-        if (GuiButton({ currentX, bottomY, modeBtnW, rowHeight }, modeLabel)) {
-            if (isSymbols) {
-                isSymbols = false;
-            }
-            else {
-
-                isCaps = !isCaps;
-            }
-        }
-
         float btnSmallW = screenW * 0.15f;
         float btnSpaceW = screenW - (btnSmallW * 3 + padding * 5);
 
-        currentX = padding;
+        float currentX = padding;
 
         if (GuiButton({ currentX, bottomY, btnSmallW, rowHeight }, isSymbols ? "ABC" : "?123")) {
             isSymbols = !isSymbols;
+            if (isSymbols) isCaps = false;
         }
         currentX += btnSmallW + padding;
 
@@ -237,7 +212,6 @@ public:
             }
         }
         else {
-            
             GuiLabel({ currentX, bottomY, btnSmallW, rowHeight }, "");
         }
         currentX += btnSmallW + padding;
@@ -250,31 +224,22 @@ public:
         if (GuiButton({ currentX, bottomY, btnSmallW, rowHeight }, "OK")) {
             Hide();
         }
-
 #endif
-    }
-
+}
 private:
 #ifdef IS_MOBILE_PLATFORM
     void InsertChar(char c) {
         if (!targetBuffer) return;
-
         int len = (int)strlen(targetBuffer);
         if (len >= maxLen - 1) return;
-
         memmove(targetBuffer + cursorIndex + 1, targetBuffer + cursorIndex, len - cursorIndex + 1);
-
         targetBuffer[cursorIndex] = c;
         cursorIndex++;
     }
-
     void DeleteChar() {
         if (!targetBuffer || cursorIndex <= 0) return;
-
         int len = (int)strlen(targetBuffer);
-
         memmove(targetBuffer + cursorIndex - 1, targetBuffer + cursorIndex, len - cursorIndex + 1);
-
         cursorIndex--;
     }
 #endif

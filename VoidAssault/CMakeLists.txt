@@ -44,12 +44,14 @@ add_subdirectory(external/raylib)
 add_subdirectory(external/json)
 add_subdirectory(external/enet)
 add_subdirectory(external/Chipmunk2D)
+add_subdirectory(external/bitsery)
 
 
 set(RAYGUI_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/raygui")
 set(FIX_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/fix")
 set(ENET_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/enet/include")
 set(CHIPMUNK2D_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/Chipmunk2D/include")
+set(BITSERY_EXTERNAL_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/external/bitsery/include")
 
 set(PROJECT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src")
 add_subdirectory(src/engine)

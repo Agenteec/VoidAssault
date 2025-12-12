@@ -1,62 +1,62 @@
 ﻿#include "GameClient.h"
-#include "scenes/MainMenuScene.h" 
+#include "scenes/MainMenuScene.h"
 #include "scenes/GameplayScene.h"
-
+#include "../engine/Utils/ConfigManager.h"
+#include "Theme.h"
 GameClient::GameClient() {
-    InitWindow(screenWidth, screenHeight, "Void Assault");
-    SetTargetFPS(60);
-    SetWindowState(FLAG_WINDOW_RESIZABLE);
+	ClientConfig& cfg = ConfigManager::GetClient();
+	screenWidth = cfg.resolutionWidth;
+	screenHeight = cfg.resolutionHeight;
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+	InitWindow(0, 0, "Void Assault");
+#else
+	InitWindow(screenWidth, screenHeight, "Void Assault");
+#endif
+	SetTargetFPS(cfg.targetFPS);
+	SetWindowState(FLAG_WINDOW_RESIZABLE);
+	SetWindowMinSize(800, 600);
 
-    netClient = ENetClient::alloc();
+	netClient = ENetClient::alloc();
 
-    GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
+	GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
 }
-
 GameClient::~GameClient() {
-    StopHost();
-    if (currentScene) currentScene->Exit();
+	StopHost();
+	if (currentScene) currentScene->Exit();
+	if (netClient) netClient->disconnect();
 
-    if (netClient) netClient->disconnect();
-
-    CloseWindow();
+	CloseWindow();
 }
-
 void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
-    nextScene = newScene;
+	nextScene = newScene;
 }
-
 void GameClient::ReturnToMenu() {
-    if (netClient) netClient->disconnect();
-    ChangeScene(std::make_shared<MainMenuScene>(this));
+	if (netClient) netClient->disconnect();
+	ChangeScene(std::make_shared<MainMenuScene>(this));
 }
-
 int GameClient::StartHost(int startPort) {
-    StopHost();
-    localServer = std::make_unique<ServerHost>();
+	StopHost();
+	localServer = std::make_unique<ServerHost>();
+	for (int p = startPort; p < startPort + 10; p++) {
+		if (localServer->Start(p)) {
+			TraceLog(LOG_INFO, "Local Server Started on port %d", p);
+			return p;
+		}
+	}
 
-    for (int p = startPort; p < startPort + 10; p++) {
-        if (localServer->Start(p)) {
-            TraceLog(LOG_INFO, "Local Server Started on port %d", p);
-            return p;
-        }
-    }
-
-    TraceLog(LOG_ERROR, "Failed to start local server. All ports busy?");
-    localServer.reset();
-    return -1;
+	TraceLog(LOG_ERROR, "Failed to start local server. All ports busy?");
+	localServer.reset();
+	return -1;
 }
-
 void GameClient::StopHost() {
-    if (localServer) {
-        localServer->Stop();
-        localServer.reset();
-        TraceLog(LOG_INFO, "Local Server Stopped.");
-    }
+	if (localServer) {
+		localServer->Stop();
+		localServer.reset();
+		TraceLog(LOG_INFO, "Local Server Stopped.");
+	}
 }
-
 void GameClient::Run() {
     ChangeScene(std::make_shared<MainMenuScene>(this));
-
     while (!WindowShouldClose()) {
         if (nextScene) {
             if (currentScene) currentScene->Exit();
@@ -94,7 +94,7 @@ void GameClient::Run() {
         if (currentScene) {
             currentScene->Update(dt);
             BeginDrawing();
-            ClearBackground(RAYWHITE);
+            ClearBackground(Theme::COL_BACKGROUND);
             currentScene->Draw();
             currentScene->DrawGUI();
             EndDrawing();

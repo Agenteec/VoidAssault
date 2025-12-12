@@ -5,7 +5,6 @@
 #include <chrono>
 
 ServerHost::ServerHost() : running(false) {
-    // Выделяем память под сервер
     netServer = ENetServer::alloc();
 }
 
@@ -16,7 +15,6 @@ ServerHost::~ServerHost() {
 bool ServerHost::Start(int port) {
     if (running) return false;
 
-    // Запуск через обертку
     if (!netServer->start(port)) {
         std::cerr << "SERVER: Failed to start on port " << port << std::endl;
         return false;
@@ -33,7 +31,6 @@ void ServerHost::Stop() {
     if (serverThread.joinable()) {
         serverThread.join();
     }
-    // Остановка обертки
     netServer->stop();
 }
 
@@ -51,7 +48,6 @@ void ServerHost::ServerLoop() {
         accumulator += frameTime.count();
         snapshotTimer += frameTime.count();
 
-        // 1. Обработка входящих сообщений
         auto msgs = netServer->poll();
 
         for (auto& msg : msgs) {
@@ -60,59 +56,66 @@ void ServerHost::ServerLoop() {
             if (msg->type() == MessageType::CONNECT) {
                 std::cout << "SERVER: Client " << peerId << " connected.\n";
 
-                // Создаем игрока, используя ID пира
-                // (Придется доработать CreatePlayer в GameScene, см. ниже, 
-                // или просто передадим этот ID)
                 auto player = gameScene.CreatePlayerWithId(peerId);
 
-                // Отправляем INIT пакет
-                auto stream = StreamBuffer::alloc();
-                stream->write((uint8_t)GamePacket::INIT);
-                stream->write(player->id);
+                InitPacket initPkt;
+                initPkt.playerId = player->id;
 
-                // Шлем надежно конкретному клиенту
+                Buffer buffer;
+                OutputAdapter adapter(buffer);
+                bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+
+                serializer.value1b(GamePacket::INIT);
+                serializer.object(initPkt);
+                serializer.adapter().flush();
+
+                auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
                 netServer->send(peerId, DeliveryType::RELIABLE, stream);
             }
             else if (msg->type() == MessageType::DISCONNECT) {
                 std::cout << "SERVER: Client " << peerId << " disconnected.\n";
-                // Удаляем игрока
                 gameScene.objects.erase(peerId);
             }
             else if (msg->type() == MessageType::DATA) {
-                // Читаем Payload
-                auto stream = msg->stream();
-                uint8_t packetType = 0;
-                stream->read(packetType);
+                const auto& buffer = msg->stream()->buffer();
+                size_t offset = msg->stream()->tellg();
+
+                if (buffer.empty() || offset >= buffer.size()) continue;
+
+                InputAdapter adapter(buffer.begin() + offset, buffer.end());
+                bitsery::Deserializer<InputAdapter> des(std::move(adapter));
+
+                uint8_t packetType;
+                des.value1b(packetType);
 
                 if (packetType == GamePacket::INPUT) {
                     PlayerInputPacket input;
-                    stream >> input; // Десериализация
+                    des.object(input);
 
-                    if (gameScene.objects.count(peerId)) {
-                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                        if (p) {
-                            p->ApplyInput(input.movement);
-                            p->aimTarget = input.aimTarget;
-                            p->wantsToShoot = input.isShooting;
+                    if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                        if (gameScene.objects.count(peerId)) {
+                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                            if (p) {
+                                p->ApplyInput(input.movement);
+                                p->aimTarget = input.aimTarget;
+                                p->wantsToShoot = input.isShooting;
+                            }
                         }
                     }
                 }
             }
         }
 
-        // 2. Обновление мира
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
         }
 
-        // 3. Рассылка состояния (Snapshot) - 20 раз в секунду
         if (snapshotTimer >= 0.05) {
             BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-        // Разгрузка CPU
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
@@ -120,10 +123,8 @@ void ServerHost::ServerLoop() {
 void ServerHost::BroadcastSnapshot() {
     if (netServer->numClients() == 0) return;
 
-    auto stream = StreamBuffer::alloc(4096); // Буфер побольше
-
-    stream->write((uint8_t)GamePacket::SNAPSHOT);
-    stream->write((uint32_t)gameScene.objects.size());
+    WorldSnapshotPacket snap;
+    snap.serverTime = GetTime();
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
@@ -134,8 +135,7 @@ void ServerHost::BroadcastSnapshot() {
             state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
         }
         else {
-            state.position = { 0,0 };
-            state.rotation = 0;
+            state.position = { 0,0 }; state.rotation = 0;
         }
 
         state.health = obj->health;
@@ -144,8 +144,18 @@ void ServerHost::BroadcastSnapshot() {
         state.radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
         state.color = obj->color;
 
-        stream << state;
+        snap.entities.push_back(state);
     }
 
+    Buffer buffer;
+    OutputAdapter adapter(buffer);
+    bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+
+    uint8_t type = GamePacket::SNAPSHOT;
+    serializer.value1b(type);
+    serializer.object(snap);
+    serializer.adapter().flush();
+
+    auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
     netServer->broadcast(DeliveryType::UNRELIABLE, stream);
 }

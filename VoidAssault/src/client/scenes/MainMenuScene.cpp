@@ -3,8 +3,8 @@
 #include "raygui_wrapper.h"
 #include "../GameClient.h"
 #include "engine/Utils/ConfigManager.h"
-#include "../ResourceManager.h" 
-#include "../Theme.h"          
+#include "ResourceManager.h" 
+#include "Theme.h"          
 #include <cstring>
 #include <string>
 #include <thread>

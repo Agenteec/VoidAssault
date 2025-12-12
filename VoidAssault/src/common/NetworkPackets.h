@@ -1,9 +1,8 @@
 ﻿#pragma once
+#include "PacketSerialization.h"
 #include "raylib.h"
 #include <cstdint>
 #include <vector>
-
-#include "serial/StreamBuffer.h" 
 
 namespace GamePacket {
     enum Type : uint8_t {
@@ -16,11 +15,17 @@ namespace GamePacket {
 
 enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY };
 
-
 struct PlayerInputPacket {
     Vector2 movement;
     Vector2 aimTarget;
     bool isShooting;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.object(movement);
+        s.object(aimTarget);
+        s.boolValue(isShooting);
+    }
 };
 
 struct EntityState {
@@ -32,72 +37,41 @@ struct EntityState {
     EntityType type;
     float radius;
     Color color;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(id);
+        s.object(position);
+        s.value4b(rotation);
+        s.value4b(health);
+        s.value4b(maxHealth);
+
+        // БЕЗОПАСНАЯ СЕРИАЛИЗАЦИЯ ENUM
+        uint8_t typeInt = static_cast<uint8_t>(type);
+        s.value1b(typeInt);
+        type = static_cast<EntityType>(typeInt);
+
+        s.value4b(radius);
+        s.object(color);
+    }
 };
 
+struct WorldSnapshotPacket {
+    double serverTime;
+    std::vector<EntityState> entities;
 
-inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const Vector2& v) {
-    stream->write(v.x);
-    stream->write(v.y);
-    return stream;
-}
+    template <typename S>
+    void serialize(S& s) {
+        s.value8b(serverTime);
+        s.container(entities, 10000);
+    }
+};
 
-inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, Vector2& v) {
-    stream->read(v.x);
-    stream->read(v.y);
-    return stream;
-}
+struct InitPacket {
+    uint32_t playerId;
 
-inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const Color& c) {
-    stream->write(c.r);
-    stream->write(c.g);
-    stream->write(c.b);
-    stream->write(c.a);
-    return stream;
-}
-
-inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, Color& c) {
-    stream->read(c.r);
-    stream->read(c.g);
-    stream->read(c.b);
-    stream->read(c.a);
-    return stream;
-}
-
-
-inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const PlayerInputPacket& p) {
-    stream->write(p.movement);
-    stream->write(p.aimTarget);
-    stream->write(p.isShooting);
-    return stream;
-}
-
-inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, PlayerInputPacket& p) {
-    stream->read(p.movement);
-    stream->read(p.aimTarget);
-    stream->read(p.isShooting);
-    return stream;
-}
-
-inline StreamBuffer::Shared& operator<<(StreamBuffer::Shared& stream, const EntityState& e) {
-    stream->write(e.id);
-    stream->write(e.position);
-    stream->write(e.rotation);
-    stream->write(e.health);
-    stream->write(e.maxHealth);
-    stream->write((uint8_t)e.type);
-    stream->write(e.radius);
-    stream << e.color;
-    return stream;
-}
-
-inline StreamBuffer::Shared& operator>>(StreamBuffer::Shared& stream, EntityState& e) {
-    stream->read(e.id);
-    stream->read(e.position);
-    stream->read(e.rotation);
-    stream->read(e.health);
-    stream->read(e.maxHealth);
-    uint8_t t; stream->read(t); e.type = (EntityType)t;
-    stream->read(e.radius);
-    stream >> e.color;
-    return stream;
-}
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(playerId);
+    }
+};
