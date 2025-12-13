@@ -3,14 +3,12 @@
 #include <vector>
 #include <string>
 #include "Theme.h"
-
 class ResourceManager {
 public:
     static ResourceManager& Get() {
         static ResourceManager instance;
         return instance;
     }
-
     void Load() {}
 
     void Unload() {}
@@ -22,7 +20,8 @@ public:
 
         int w = GetScreenWidth();
         int h = GetScreenHeight();
-        int gridSize = 50;
+        float scale = (float)h / 720.0f;
+        int gridSize = (int)(50 * (scale < 1.0f ? 1.0f : scale));
 
         for (int i = 0; i < w; i += gridSize) DrawLine(i, 0, i, h, Theme::COL_ACCENT_DIM);
         for (int i = 0; i < h; i += gridSize) DrawLine(0, i, w, i, Theme::COL_ACCENT_DIM);
@@ -32,25 +31,34 @@ public:
         DrawRectangleRec(rect, Theme::COL_PANEL);
         DrawRectangleLinesEx(rect, 2, Theme::COL_ACCENT_DIM);
 
-        float lineLen = 15.0f;
-        DrawLineEx({ rect.x, rect.y }, { rect.x + lineLen, rect.y }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x, rect.y }, { rect.x, rect.y + lineLen }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width - lineLen, rect.y + rect.height }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width, rect.y + rect.height - lineLen }, 3, Theme::COL_ACCENT);
+        float minDim = (rect.width < rect.height) ? rect.width : rect.height;
+        float lineLen = minDim * 0.1f;
+        if (lineLen > 30.0f) lineLen = 30.0f;
+
+        float lineThick = 3.0f;
+
+        DrawLineEx({ rect.x, rect.y }, { rect.x + lineLen, rect.y }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x, rect.y }, { rect.x, rect.y + lineLen }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width - lineLen, rect.y + rect.height }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width, rect.y + rect.height - lineLen }, lineThick, Theme::COL_ACCENT);
 
         if (title) {
-            float fontSize = 24.0f;
+            float fontSize = rect.height * 0.08f;
+            if (fontSize < 24.0f) fontSize = 24.0f;
+            if (fontSize > 48.0f) fontSize = 48.0f;
+
             float spacing = 1.0f;
             Vector2 textSize = MeasureTextEx(font, title, fontSize, spacing);
 
+            float labelPad = 10.0f;
             float labelX = rect.x + 20;
-            float labelY = rect.y - 12;
-            float labelW = textSize.x + 20;
-            float labelH = 24;
+            float labelY = rect.y - (textSize.y / 2);
+            float labelW = textSize.x + (labelPad * 2);
+            float labelH = textSize.y;
 
             DrawRectangle(labelX - 2, labelY, labelW + 4, labelH, Theme::COL_BACKGROUND);
             DrawRectangleLines(labelX, labelY, labelW, labelH, Theme::COL_ACCENT_DIM);
-            DrawTextEx(font, title, { labelX + 10, rect.y - 12 }, fontSize, spacing, Theme::COL_ACCENT);
+            DrawTextEx(font, title, { labelX + labelPad, labelY }, fontSize, spacing, Theme::COL_ACCENT);
         }
     }
 };

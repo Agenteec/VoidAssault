@@ -9,6 +9,8 @@ GameClient::GameClient() {
 	screenHeight = cfg.resolutionHeight;
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
 	InitWindow(0, 0, "Void Assault");
+	screenWidth = GetScreenWidth();
+	screenHeight = GetScreenHeight();
 #else
 	InitWindow(screenWidth, screenHeight, "Void Assault");
 #endif
@@ -18,13 +20,15 @@ GameClient::GameClient() {
 
 	netClient = ENetClient::alloc();
 
-	GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
+	float scale = GetUIScale();
+	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * scale));
+	GuiSetStyle(DEFAULT, TEXT_SPACING, (int)(1 * scale));
+	GuiSetStyle(DEFAULT, BORDER_WIDTH, (int)(2 * scale));
 }
 GameClient::~GameClient() {
 	StopHost();
 	if (currentScene) currentScene->Exit();
 	if (netClient) netClient->disconnect();
-
 	CloseWindow();
 }
 void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
@@ -43,7 +47,6 @@ int GameClient::StartHost(int startPort) {
 			return p;
 		}
 	}
-
 	TraceLog(LOG_ERROR, "Failed to start local server. All ports busy?");
 	localServer.reset();
 	return -1;
@@ -55,49 +58,57 @@ void GameClient::StopHost() {
 		TraceLog(LOG_INFO, "Local Server Stopped.");
 	}
 }
+float GameClient::GetUIScale() const {
+	int h = GetScreenHeight();
+	float scale = (float)h / 720.0f;
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+	scale *= 1.25f;
+#endif
+	if (scale < 1.0f) scale = 1.0f;
+	return scale;
+}
 void GameClient::Run() {
-    ChangeScene(std::make_shared<MainMenuScene>(this));
-    while (!WindowShouldClose()) {
-        if (nextScene) {
-            if (currentScene) currentScene->Exit();
-            currentScene = nextScene;
-            currentScene->Enter();
-            nextScene = nullptr;
-        }
+	ChangeScene(std::make_shared<MainMenuScene>(this));
+	while (!WindowShouldClose()) {
+		if (nextScene) {
+			if (currentScene) currentScene->Exit();
+			currentScene = nextScene;
+			currentScene->Enter();
+			nextScene = nullptr;
+		}
+		float dt = GetFrameTime();
 
-        float dt = GetFrameTime();
+		if (netClient) {
+			auto msgs = netClient->poll();
 
-        if (netClient) {
-            auto msgs = netClient->poll();
+			for (auto& msg : msgs) {
+				if (msg->type() == MessageType::CONNECT) {
+					TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
+					if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+						ChangeScene(std::make_shared<GameplayScene>(this));
+					}
+				}
+				else if (msg->type() == MessageType::DISCONNECT) {
+					TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
+					if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+						ReturnToMenu();
+					}
+				}
+				else if (msg->type() == MessageType::DATA) {
+					if (currentScene) {
+						currentScene->OnMessage(msg);
+					}
+				}
+			}
+		}
 
-            for (auto& msg : msgs) {
-                if (msg->type() == MessageType::CONNECT) {
-                    TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
-                    if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                        ChangeScene(std::make_shared<GameplayScene>(this));
-                    }
-                }
-                else if (msg->type() == MessageType::DISCONNECT) {
-                    TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
-                    if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                        ReturnToMenu();
-                    }
-                }
-                else if (msg->type() == MessageType::DATA) {
-                    if (currentScene) {
-                        currentScene->OnMessage(msg);
-                    }
-                }
-            }
-        }
-
-        if (currentScene) {
-            currentScene->Update(dt);
-            BeginDrawing();
-            ClearBackground(Theme::COL_BACKGROUND);
-            currentScene->Draw();
-            currentScene->DrawGUI();
-            EndDrawing();
-        }
-    }
+		if (currentScene) {
+			currentScene->Update(dt);
+			BeginDrawing();
+			ClearBackground(Theme::COL_BACKGROUND);
+			currentScene->Draw();
+			currentScene->DrawGUI();
+			EndDrawing();
+		}
+	}
 }

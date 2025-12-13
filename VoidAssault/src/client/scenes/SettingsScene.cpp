@@ -22,47 +22,64 @@ void SettingsScene::Draw() {
 	ResourceManager::Get().DrawBackground();
 }
 void SettingsScene::DrawGUI() {
-	float w = (float)game->GetWidth();
-	float h = (float)game->GetHeight();
+	int w = game->GetWidth();
+	int h = game->GetHeight();
 	float cx = w / 2.0f;
-	float cy = h / 2.0f - 200;
-	Rectangle panelRect = { cx - 250, cy - 20, 500, 450 };
+	float uiScale = game->GetUIScale();
+	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale));
+
+	float panelW = w * 0.8f;
+	if (panelW > 600 * uiScale) panelW = 600 * uiScale;
+
+	int items = 2;
+#if !defined(PLATFORM_ANDROID) && !defined(ANDROID)
+	items++;
+#endif
+	float elemH = 40 * uiScale;
+	float spacing = 30 * uiScale;
+	float padding = 40 * uiScale;
+	float panelH = (padding * 2) + (items * (elemH + spacing + 30 * uiScale));
+	float panelY = (h - panelH) / 2.0f;
+
+	Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
 	ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_settings"), ConfigManager::GetFont());
 
-	float contentX = cx - 200;
-	float currentY = cy + 40;
-	float width = 400;
+	float contentX = panelRect.x + padding;
+	float currentY = panelRect.y + padding + 10 * uiScale;
+	float contentW = panelRect.width - (padding * 2);
 
-	GuiLabel({ contentX, currentY, width, 20 }, ConfigManager::Text("lbl_master_vol"));
-	currentY += 25;
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_master_vol"));
+	currentY += 30 * uiScale;
 	float vol = game->audio.GetVolume();
-	if (GuiSlider({ contentX, currentY, width, 30 }, "0%", "100%", &vol, 0.0f, 1.0f)) {
+	if (GuiSlider({ contentX, currentY, contentW, elemH }, "0%", "100%", &vol, 0.0f, 1.0f)) {
 		game->audio.SetVolume(vol);
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 
-	GuiLabel({ contentX, currentY, width, 20 }, ConfigManager::Text("lbl_language"));
-	currentY += 25;
-
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_language"));
+	currentY += 30 * uiScale;
 	std::string langBtnText = "< " + ConfigManager::GetCurrentLangName() + " >";
-	if (GuiButton({ contentX, currentY, width, 40 }, langBtnText.c_str())) {
+	if (GuiButton({ contentX, currentY, contentW, elemH }, langBtnText.c_str())) {
 		ConfigManager::CycleLanguage();
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 #if !defined(PLATFORM_ANDROID) && !defined(ANDROID)
-	GuiLabel({ contentX, currentY, width, 20 }, "Resolution");
-	currentY += 25;
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, "Resolution");
+	currentY += 30 * uiScale;
 	std::string resText = std::to_string((int)resolutions[currentResIndex].x) + "x" + std::to_string((int)resolutions[currentResIndex].y);
-	if (GuiButton({ contentX, currentY, width, 40 }, resText.c_str())) {
+	if (GuiButton({ contentX, currentY, contentW, elemH }, resText.c_str())) {
 		currentResIndex = (currentResIndex + 1) % resolutions.size();
 		ConfigManager::GetClient().resolutionWidth = (int)resolutions[currentResIndex].x;
 		ConfigManager::GetClient().resolutionHeight = (int)resolutions[currentResIndex].y;
 		ConfigManager::Save();
 		SetWindowSize((int)resolutions[currentResIndex].x, (int)resolutions[currentResIndex].y);
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 #endif
-	if (GuiButton({ cx - 100, panelRect.y + panelRect.height + 20, 200, 40 }, ConfigManager::Text("btn_back"))) {
+	float backBtnH = 50 * uiScale;
+	float backBtnY = panelRect.y + panelRect.height + spacing;
+
+	if (GuiButton({ cx - (150 * uiScale), backBtnY, 300 * uiScale, backBtnH }, ConfigManager::Text("btn_back"))) {
 		game->ReturnToMenu();
 	}
 }
