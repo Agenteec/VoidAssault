@@ -1,4 +1,5 @@
-﻿#include "GameplayScene.h"
+﻿// client/scenes/GameplayScene.cpp
+#include "GameplayScene.h"
 #include "GameClient.h"
 #include <iostream>
 
@@ -109,9 +110,10 @@ void GameplayScene::Update(float dt) {
         }
 
         Vector2 aimDir = rightStick->GetAxis();
-        if (Vector2Length(aimDir) > 0.2f) {
+        if (Vector2Length(aimDir) > 0.1f) {
             pkt.isShooting = true;
             pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(aimDir, 300.0f));
+            predictedRot = atan2f(aimDir.y, aimDir.x) * RAD2DEG;
         }
     }
 #else
@@ -201,7 +203,6 @@ void GameplayScene::Draw() {
                     };
                     DrawLineEx(renderState.position, barrelEnd, 15, DARKGRAY);
 
-                    // HP Bar
                     float hpPct = renderState.health / renderState.maxHealth;
                     if (renderState.maxHealth > 0) {
                         DrawRectangle((int)renderState.position.x - 20, (int)renderState.position.y - 40, 40, 5, RED);

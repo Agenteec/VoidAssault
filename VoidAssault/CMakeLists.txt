@@ -35,11 +35,12 @@ endif()
 
 if(ANDROID)
 
-    if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
+ if(ANDROID_ABI STREQUAL "arm64-v8a" OR ANDROID_ABI STREQUAL "x86_64")
         message(STATUS "Building for 64-bit ABI (${ANDROID_ABI}), enabling CP_USE_DOUBLES.")
         add_definitions(-DCP_USE_DOUBLES=1)
     else()
-        message(STATUS "Building for 32-bit ABI (${ANDROID_ABI}), double precision is disabled.")
+        message(STATUS "Building for 32-bit ABI (${ANDROID_ABI}), CP_USE_DOUBLES DISABLED.")
+        add_definitions(-DCP_USE_DOUBLES=0)
     endif()
 
 
