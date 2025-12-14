@@ -3,13 +3,21 @@
 #include "raygui.h"
 
 namespace Theme {
-   
-    static const Color COL_BACKGROUND = { 240, 240, 245, 255 };
+
+    static const Color COL_BACKGROUND = { 240, 240, 240, 255 };
+
+    static const Color COL_GRID = { 205, 205, 205, 255 };
+
     static const Color COL_PANEL = { 255, 255, 255, 245 };
-    static const Color COL_ACCENT = { 0, 120, 200, 255 };
+    static const Color COL_ACCENT = { 0, 178, 225, 255 };
     static const Color COL_ACCENT_DIM = { 200, 200, 210, 255 };
     static const Color COL_TEXT = { 40, 40, 50, 255 };
-    static const Color COL_WARNING = { 200, 50, 50, 255 };
+    static const Color COL_WARNING = { 230, 80, 80, 255 };
+
+    static const Color COLOR_BLUE = { 0, 178, 225, 255 };
+    static const Color COLOR_RED = { 241, 78, 84, 255 };
+    static const Color COLOR_GREEN = { 0, 225, 110, 255 };
+    static const Color COLOR_PURPLE = { 191, 127, 245, 255 };
 
     inline void ApplyTheme() {
         GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0xF5F5F5FF);

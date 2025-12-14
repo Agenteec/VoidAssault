@@ -4,7 +4,6 @@
 #include <iostream>
 #include <chrono>
 #include <cmath>
-#include <iomanip>
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
@@ -32,10 +31,7 @@ bool ServerHost::Start(int port) {
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    if (!netServer->start(port)) {
-        std::cerr << "SERVER: Failed to start on port " << port << std::endl;
-        return false;
-    }
+    if (!netServer->start(port)) return false;
 
     std::cout << "SERVER: Started on port " << port << std::endl;
     running = true;
@@ -45,9 +41,7 @@ bool ServerHost::Start(int port) {
 
 void ServerHost::Stop() {
     running = false;
-    if (serverThread.joinable()) {
-        serverThread.join();
-    }
+    if (serverThread.joinable()) serverThread.join();
     netServer->stop();
 }
 
@@ -56,93 +50,53 @@ void ServerHost::ServerLoop() {
     auto lastTime = clock::now();
     double accumulator = 0.0;
     const double dt = 1.0 / 60.0;
+
     double snapshotTimer = 0.0;
-
-    double debugLogTimer = 0.0;
-
-    std::cout << "SERVER: Loop started. Tick rate: " << dt << std::endl;
+    double statsTimer = 0.0;
 
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
-        std::chrono::duration<double> frameTimeWrapper = currentTime - lastTime;
-        double frameTime = frameTimeWrapper.count();
+        double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        if (std::isnan(frameTime) || frameTime < 0.0) {
-            frameTime = 0.001;
-            std::cerr << "WARNING: NaN frame time detected!" << std::endl;
-        }
-
-        if (frameTime > 0.25) {
-            // std::cerr << "WARNING: Lag spike detected: " << frameTime << "s" << std::endl;
-            frameTime = 0.25;
-        }
+        if (frameTime > 0.25) frameTime = 0.25;
 
         accumulator += frameTime;
         snapshotTimer += frameTime;
-        debugLogTimer += frameTime;
-
-        if (debugLogTimer > 5.0) {
-            std::cout << "SERVER ALIVE: Time: " << GetSystemTime()
-                << " Clients: " << netServer->numClients()
-                << " Objects: " << gameScene.objects.size() << std::endl;
-            debugLogTimer = 0.0;
-        }
-
+        statsTimer += frameTime;
 
         auto msgs = netServer->poll();
-
         for (auto& msg : msgs) {
             uint32_t peerId = msg->peerId();
 
             if (msg->type() == MessageType::CONNECT) {
-                std::cout << "SERVER: Client " << peerId << " connected.\n";
-
+                std::cout << "Client " << peerId << " connected.\n";
                 auto player = gameScene.CreatePlayerWithId(peerId);
 
-                InitPacket initPkt;
-                initPkt.playerId = player->id;
-
-                Buffer buffer;
-                OutputAdapter adapter(buffer);
-                bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-
-                serializer.value1b(GamePacket::INIT);
-                serializer.object(initPkt);
-                serializer.adapter().flush();
-
-                auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
-                netServer->send(peerId, DeliveryType::RELIABLE, stream);
+                InitPacket initPkt; initPkt.playerId = player->id;
+                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+                netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
             }
             else if (msg->type() == MessageType::DISCONNECT) {
-                std::cout << "SERVER: Client " << peerId << " disconnected.\n";
                 gameScene.objects.erase(peerId);
             }
             else if (msg->type() == MessageType::DATA) {
-                const auto& buffer = msg->stream()->buffer();
+                const auto& buf = msg->stream()->buffer();
                 size_t offset = msg->stream()->tellg();
-
-                if (buffer.empty() || offset >= buffer.size()) continue;
-
-                InputAdapter adapter(buffer.begin() + offset, buffer.end());
-                bitsery::Deserializer<InputAdapter> des(std::move(adapter));
-
-                uint8_t packetType;
-                des.value1b(packetType);
-
-                if (packetType == GamePacket::INPUT) {
-                    PlayerInputPacket input = {};
-                    des.object(input);
-
-                    if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                        if (gameScene.objects.count(peerId)) {
-                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                            if (p) {
-                              
-                                if (std::isfinite(input.movement.x) && std::isfinite(input.movement.y)) {
-                                    p->ApplyInput(input.movement);
-                                    p->aimTarget = input.aimTarget;
-                                    p->wantsToShoot = input.isShooting;
+                if (!buf.empty() && offset < buf.size()) {
+                    InputAdapter ia(buf.begin() + offset, buf.end());
+                    bitsery::Deserializer<InputAdapter> des(std::move(ia));
+                    uint8_t type; des.value1b(type);
+                    if (type == GamePacket::INPUT) {
+                        PlayerInputPacket inp; des.object(inp);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            if (gameScene.objects.count(peerId)) {
+                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                                if (p) {
+                                    p->ApplyInput(inp.movement);
+                                    p->aimTarget = inp.aimTarget;
+                                    p->wantsToShoot = inp.isShooting;
                                 }
                             }
                         }
@@ -151,23 +105,38 @@ void ServerHost::ServerLoop() {
             }
         }
 
-
-        int physicsSteps = 0;
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
-            physicsSteps++;
-
-           
-            if (physicsSteps > 5) {
-                accumulator = 0;
-                break;
-            }
         }
 
-        if (snapshotTimer >= 0.05) {
+        if (snapshotTimer >= 0.033) {
             BroadcastSnapshot();
             snapshotTimer = 0;
+        }
+
+        if (statsTimer >= 0.2) {
+            for (auto& [id, obj] : gameScene.objects) {
+                if (obj->type == EntityType::PLAYER) {
+                    auto p = std::dynamic_pointer_cast<Player>(obj);
+
+                    PlayerStatsPacket stats;
+                    stats.level = p->level;
+                    stats.currentXp = p->currentXp;
+                    stats.maxXp = p->maxXp;
+                    stats.maxHealth = p->maxHealth;
+                    stats.damage = p->curDamage;
+                    stats.speed = p->curSpeed;
+
+                    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                    ser.value1b(GamePacket::STATS);
+                    ser.object(stats);
+                    ser.adapter().flush();
+
+                    netServer->send(id, DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                }
+            }
+            statsTimer = 0;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -186,13 +155,6 @@ void ServerHost::BroadcastSnapshot() {
 
         if (obj->body) {
             cpVect pos = cpBodyGetPosition(obj->body);
-            if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
-                pos = cpv(0, 0);
-                cpBodySetPosition(obj->body, pos);
-                cpBodySetVelocity(obj->body, cpv(0, 0));
-                std::cerr << "WARN: Resetting body " << id << " due to NaN position" << std::endl;
-            }
-
             state.position = ToRay(pos);
             state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
         }
@@ -203,21 +165,25 @@ void ServerHost::BroadcastSnapshot() {
         state.health = obj->health;
         state.maxHealth = obj->maxHealth;
         state.type = obj->type;
-        state.radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
         state.color = obj->color;
+
+        state.level = 1;
+        state.radius = 20.0f;
+
+        if (obj->type == EntityType::PLAYER) {
+            auto p = std::dynamic_pointer_cast<Player>(obj);
+            if (p) state.level = p->level;
+        }
+        else if (obj->type == EntityType::BULLET) {
+            state.radius = 5.0f;
+        }
 
         snap.entities.push_back(state);
     }
 
-    Buffer buffer;
-    OutputAdapter adapter(buffer);
-    bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-
-    uint8_t type = GamePacket::SNAPSHOT;
-    serializer.value1b(type);
-    serializer.object(snap);
-    serializer.adapter().flush();
-
-    auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
-    netServer->broadcast(DeliveryType::UNRELIABLE, stream);
+    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+    ser.value1b(GamePacket::SNAPSHOT);
+    ser.object(snap);
+    ser.adapter().flush();
+    netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
 }

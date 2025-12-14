@@ -3,82 +3,126 @@
 #include "../PhysicsUtils.h"
 #include "raymath.h"
 
+struct ArtifactStats {
+    float damageMult = 0.0f;
+    float speedMult = 0.0f;
+    float healthFlat = 0.0f;
+    float reloadMult = 0.0f;
+};
+
 class Player : public GameObject {
 public:
-    float speed = 200.0f;
-    float shootCooldown = 0.0f;
-    const float FIRE_RATE = 0.2f;
+    const float BASE_SPEED = 220.0f;
+    const float BASE_RELOAD = 0.5f;
+    const float BASE_DAMAGE = 15.0f;
+    const float BASE_HP = 100.0f;
 
+    uint32_t level = 1;
+    float currentXp = 0.0f;
+    float maxXp = 100.0f;
+
+    ArtifactStats artifacts;
+
+    float shootCooldown = 0.0f;
     bool wantsToShoot = false;
     Vector2 aimTarget = { 0,0 };
     bool spawnBulletSignal = false;
     Vector2 bulletDir = { 0,0 };
+    Vector2 currentVelocity = { 0,0 };
+
+    Vector2 knockback = { 0, 0 };
+
+    float curSpeed = 0;
+    float curReload = 0;
+    float curDamage = 0;
 
     Player(uint32_t id, Vector2 startPos, cpSpace* space) : GameObject(id, EntityType::PLAYER) {
         spaceRef = space;
-        color = BLUE;
+        color = { 0, 120, 215, 255 };
 
         cpFloat radius = 20.0;
-        cpFloat mass = 10.0;
+        cpFloat mass = 5.0;
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
 
         body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
         cpBodySetPosition(body, ToCp(startPos));
-
         cpBodySetMoment(body, INFINITY);
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
-        cpShapeSetFriction(shape, 0.7);
-        cpShapeSetElasticity(shape, 0.1);
-        cpShapeSetCollisionType(shape, COLLISION_PLAYER);
 
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
+        cpShapeSetFriction(shape, 0.0f);
+        cpShapeSetElasticity(shape, 0.0f);
+        cpShapeSetCollisionType(shape, COLLISION_PLAYER);
         cpShapeSetUserData(shape, (void*)this);
+
+        RecalculateStats();
+        health = maxHealth;
+    }
+
+    void RecalculateStats() {
+        float lvlScale = (float)(level - 1);
+        maxHealth = (BASE_HP + artifacts.healthFlat) * (1.0f + (lvlScale * 0.1f));
+        curDamage = BASE_DAMAGE * (1.0f + (lvlScale * 0.1f) + artifacts.damageMult);
+        curSpeed = BASE_SPEED * (1.0f + (lvlScale * 0.02f) + artifacts.speedMult);
+        curReload = BASE_RELOAD * (1.0f - (lvlScale * 0.03f) - artifacts.reloadMult);
+        if (curReload < 0.1f) curReload = 0.1f;
+    }
+
+    void AddXp(float amount) {
+        currentXp += amount;
+        while (currentXp >= maxXp) {
+            currentXp -= maxXp;
+            level++;
+            maxXp *= 1.2f;
+            RecalculateStats();
+            health = maxHealth;
+        }
+    }
+
+    void AddArtifactBonus(int type) {
+        switch (type) {
+        case 0: artifacts.damageMult += 0.05f; break;
+        case 1: artifacts.speedMult += 0.05f; break;
+        case 2: artifacts.healthFlat += 25.0f; break;
+        case 3: artifacts.reloadMult += 0.05f; break;
+        }
+        RecalculateStats();
     }
 
     void Update(float dt) override {
         if (shootCooldown > 0) shootCooldown -= dt;
 
-        
+        knockback = Vector2Lerp(knockback, { 0,0 }, dt * 5.0f);
+
         Vector2 pos = ToRay(cpBodyGetPosition(body));
+        cpVect cv = cpBodyGetVelocity(body);
+        currentVelocity = { (float)cv.x, (float)cv.y };
 
         if (wantsToShoot && shootCooldown <= 0) {
-            shootCooldown = FIRE_RATE;
+            shootCooldown = curReload;
             spawnBulletSignal = true;
             bulletDir = Vector2Subtract(aimTarget, pos);
+
+            Vector2 recoilDir = Vector2Normalize(bulletDir);
+            float recoilForce = 150.0f;             knockback = Vector2Subtract(knockback, Vector2Scale(recoilDir, recoilForce));
         }
 
         Vector2 diff = Vector2Subtract(aimTarget, pos);
         rotation = atan2(diff.y, diff.x) * RAD2DEG;
-
         cpBodySetAngle(body, atan2(diff.y, diff.x));
-
-        cpVect vel = cpBodyGetVelocity(body);
-        cpBodySetVelocity(body, cpvmult(vel, 0.90f));
     }
 
     void ApplyInput(Vector2 move) {
         if (!body) return;
 
+        if (!std::isfinite(move.x) || !std::isfinite(move.y)) move = { 0, 0 };
+        float len = Vector2Length(move);
+        if (len > 1.0f) move = Vector2Normalize(move);
+        if (len < 0.1f) move = { 0, 0 };
 
-        if (!std::isfinite(move.x) || !std::isfinite(move.y)) {
-            move = { 0, 0 };
-        }
+        Vector2 targetVel = Vector2Scale(move, curSpeed);
+        Vector2 finalVel = Vector2Add(targetVel, knockback);
 
-
-        float length = Vector2Length(move);
-        if (length > 1.0f) {
-            move = Vector2Normalize(move);
-
-            if (!std::isfinite(move.x)) move = { 0, 0 };
-        }
-
-        float targetX = move.x * speed;
-        float targetY = move.y * speed;
-
-        if (!std::isfinite(targetX)) targetX = 0;
-        if (!std::isfinite(targetY)) targetY = 0;
-
-        cpBodySetVelocity(body, cpv(targetX, targetY));
-
+        cpBodySetVelocity(body, cpv(finalVel.x, finalVel.y));
         cpBodySetAngularVelocity(body, 0.0f);
     }
 };

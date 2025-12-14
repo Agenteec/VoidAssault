@@ -89,8 +89,7 @@ void MainMenuScene::DrawGUI() {
         float panelY = (h - panelH) / 2.0f + (h * 0.05f);
 
         Rectangle menuRect = { cx - panelW / 2, panelY, panelW, panelH };
-        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.0.3", font);
-
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.4(15.12.2025)", font);
         float currentY = panelY + panelPadding;
 
         if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {

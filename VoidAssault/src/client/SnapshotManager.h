@@ -1,5 +1,4 @@
-﻿// client/SnapshotManager.h
-#pragma once
+﻿#pragma once
 #include "common/NetworkPackets.h"
 #include "raymath.h"
 #include <deque>
@@ -11,7 +10,8 @@ class SnapshotManager {
 public:
     std::deque<WorldSnapshotPacket> history;
 
-    const double INTERPOLATION_DELAY = 0.020;
+
+    const double INTERPOLATION_DELAY = 0.050;
 
     float LerpAngle(float start, float end, float amount) {
         float difference = std::abs(end - start);
@@ -40,6 +40,9 @@ public:
     bool GetInterpolatedState(uint32_t entityId, double clientRenderTime, EntityState& outState) {
         if (history.empty()) return false;
 
+        if (clientRenderTime < history.front().serverTime) {
+            return FindEntityInSnapshot(history.front(), entityId, outState);
+        }
 
         auto it = std::lower_bound(history.begin(), history.end(), clientRenderTime,
             [](const WorldSnapshotPacket& snap, double val) {
@@ -64,19 +67,18 @@ public:
         if (hasA && hasB) {
             double totalDt = snapB.serverTime - snapA.serverTime;
             double currentDt = clientRenderTime - snapA.serverTime;
-            float t = (float)(currentDt / totalDt);
 
+            if (totalDt <= 0.000001) totalDt = 0.000001;
+
+            float t = (float)(currentDt / totalDt);
 
             if (t < 0.0f) t = 0.0f;
             if (t > 1.0f) t = 1.0f;
 
-            if (entB.type == EntityType::BULLET) {
-                outState = entB;
-                outState.position = Vector2Lerp(entA.position, entB.position, t);
-            }
-            else {
-                outState = entB;
-                outState.position = Vector2Lerp(entA.position, entB.position, t);
+            outState = entB;
+            outState.position = Vector2Lerp(entA.position, entB.position, t);
+
+            if (entB.type != EntityType::BULLET) {
                 outState.rotation = LerpAngle(entA.rotation, entB.rotation, t);
             }
             return true;

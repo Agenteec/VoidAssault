@@ -159,6 +159,8 @@ GameClient::GameClient() {
 	screenHeight = cfg.resolutionHeight;
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
 	InitWindow(0, 0, "Void Assault");
+	screenWidth = GetScreenWidth();
+	screenHeight = GetScreenHeight();
 #else
 	InitWindow(screenWidth, screenHeight, "Void Assault");
 #endif
@@ -168,13 +170,15 @@ GameClient::GameClient() {
 
 	netClient = ENetClient::alloc();
 
-	GuiSetStyle(DEFAULT, TEXT_SIZE, 20);
+	float scale = GetUIScale();
+	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * scale));
+	GuiSetStyle(DEFAULT, TEXT_SPACING, (int)(1 * scale));
+	GuiSetStyle(DEFAULT, BORDER_WIDTH, (int)(2 * scale));
 }
 GameClient::~GameClient() {
 	StopHost();
 	if (currentScene) currentScene->Exit();
 	if (netClient) netClient->disconnect();
-
 	CloseWindow();
 }
 void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
@@ -193,7 +197,6 @@ int GameClient::StartHost(int startPort) {
 			return p;
 		}
 	}
-
 	TraceLog(LOG_ERROR, "Failed to start local server. All ports busy?");
 	localServer.reset();
 	return -1;
@@ -205,90 +208,96 @@ void GameClient::StopHost() {
 		TraceLog(LOG_INFO, "Local Server Stopped.");
 	}
 }
+float GameClient::GetUIScale() const {
+	int h = GetScreenHeight();
+	float scale = (float)h / 720.0f;
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+	scale *= 1.25f;
+#endif
+	if (scale < 1.0f) scale = 1.0f;
+	return scale;
+}
 void GameClient::Run() {
-    ChangeScene(std::make_shared<MainMenuScene>(this));
-    while (!WindowShouldClose()) {
-        if (nextScene) {
-            if (currentScene) currentScene->Exit();
-            currentScene = nextScene;
-            currentScene->Enter();
-            nextScene = nullptr;
-        }
+	ChangeScene(std::make_shared<MainMenuScene>(this));
+	while (!WindowShouldClose()) {
+		if (nextScene) {
+			if (currentScene) currentScene->Exit();
+			currentScene = nextScene;
+			currentScene->Enter();
+			nextScene = nullptr;
+		}
+		float dt = GetFrameTime();
 
-        float dt = GetFrameTime();
+		if (netClient) {
+			auto msgs = netClient->poll();
 
-        if (netClient) {
-            auto msgs = netClient->poll();
+			for (auto& msg : msgs) {
+				if (msg->type() == MessageType::CONNECT) {
+					TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
+					if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+						ChangeScene(std::make_shared<GameplayScene>(this));
+					}
+				}
+				else if (msg->type() == MessageType::DISCONNECT) {
+					TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
+					if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+						ReturnToMenu();
+					}
+				}
+				else if (msg->type() == MessageType::DATA) {
+					if (currentScene) {
+						currentScene->OnMessage(msg);
+					}
+				}
+			}
+		}
 
-            for (auto& msg : msgs) {
-                if (msg->type() == MessageType::CONNECT) {
-                    TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
-                    if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                        ChangeScene(std::make_shared<GameplayScene>(this));
-                    }
-                }
-                else if (msg->type() == MessageType::DISCONNECT) {
-                    TraceLog(LOG_INFO, ">> CLIENT: Disconnected.");
-                    if (std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                        ReturnToMenu();
-                    }
-                }
-                else if (msg->type() == MessageType::DATA) {
-                    if (currentScene) {
-                        currentScene->OnMessage(msg);
-                    }
-                }
-            }
-        }
-
-        if (currentScene) {
-            currentScene->Update(dt);
-            BeginDrawing();
-            ClearBackground(Theme::COL_BACKGROUND);
-            currentScene->Draw();
-            currentScene->DrawGUI();
-            EndDrawing();
-        }
-    }
+		if (currentScene) {
+			currentScene->Update(dt);
+			BeginDrawing();
+			ClearBackground(Theme::COL_BACKGROUND);
+			currentScene->Draw();
+			currentScene->DrawGUI();
+			EndDrawing();
+		}
+	}
 }
 // client\GameClient.h
 ﻿#pragma once
 #include "raygui_wrapper.h"
-#include "enet/ENetClient.h" 
+#include "enet/ENetClient.h"
 #include "../engine/Scenes/Scene.h"
 #include "../engine/ServerHost.h"
 #include "AudioManager.h"
 #include <memory>
-
 class Scene;
-
 class GameClient {
 public:
-    int screenWidth = 1280;
-    int screenHeight = 720;
+	int screenWidth = 1280;
+	int screenHeight = 720;
+	ENetClient::Shared netClient;
+	std::unique_ptr<ServerHost> localServer;
+	AudioManager audio;
 
+	std::shared_ptr<Scene> currentScene;
+	std::shared_ptr<Scene> nextScene;
 
-    ENetClient::Shared netClient;
+	GameClient();
+	~GameClient();
 
-    std::unique_ptr<ServerHost> localServer;
-    AudioManager audio;
+	void Run();
+	void ChangeScene(std::shared_ptr<Scene> newScene);
+	void ReturnToMenu();
 
-    std::shared_ptr<Scene> currentScene;
-    std::shared_ptr<Scene> nextScene;
+	int StartHost(int port);
+	void StopHost();
 
-    GameClient();
-    ~GameClient();
+	int GetWidth() const { return GetScreenWidth(); }
+	int GetHeight() const { return GetScreenHeight(); }
 
-    void Run();
-    void ChangeScene(std::shared_ptr<Scene> newScene);
-    void ReturnToMenu();
-
-    int StartHost(int port);
-    void StopHost();
-
-    int GetWidth() const { return GetScreenWidth(); }
-    int GetHeight() const { return GetScreenHeight(); }
+	float GetUIScale() const;
 };
+
 // client\main_client.cpp
 ﻿#define RAYGUI_IMPLEMENTATION
 #include "raygui_wrapper.h"
@@ -334,6 +343,7 @@ Font LoadFont() {
 	return mainFont;
 }
 int main(int argc, char** argv){
+	srand(time(NULL));
 	if (enet_initialize() != 0) {
 		return -1;
 	}
@@ -372,8 +382,8 @@ int main(int argc, char** argv){
 struct Particle {
     Vector2 position;
     Vector2 velocity;
-    float life;      // 1.0 -> 0.0
-    float decayRate; // Скорость исчезновения
+    float life;
+    float decayRate;
     float size;
     Color color;
 };
@@ -440,14 +450,12 @@ public:
 #include <vector>
 #include <string>
 #include "Theme.h"
-
 class ResourceManager {
 public:
     static ResourceManager& Get() {
         static ResourceManager instance;
         return instance;
     }
-
     void Load() {}
 
     void Unload() {}
@@ -459,7 +467,8 @@ public:
 
         int w = GetScreenWidth();
         int h = GetScreenHeight();
-        int gridSize = 50;
+        float scale = (float)h / 720.0f;
+        int gridSize = (int)(50 * (scale < 1.0f ? 1.0f : scale));
 
         for (int i = 0; i < w; i += gridSize) DrawLine(i, 0, i, h, Theme::COL_ACCENT_DIM);
         for (int i = 0; i < h; i += gridSize) DrawLine(0, i, w, i, Theme::COL_ACCENT_DIM);
@@ -469,25 +478,34 @@ public:
         DrawRectangleRec(rect, Theme::COL_PANEL);
         DrawRectangleLinesEx(rect, 2, Theme::COL_ACCENT_DIM);
 
-        float lineLen = 15.0f;
-        DrawLineEx({ rect.x, rect.y }, { rect.x + lineLen, rect.y }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x, rect.y }, { rect.x, rect.y + lineLen }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width - lineLen, rect.y + rect.height }, 3, Theme::COL_ACCENT);
-        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width, rect.y + rect.height - lineLen }, 3, Theme::COL_ACCENT);
+        float minDim = (rect.width < rect.height) ? rect.width : rect.height;
+        float lineLen = minDim * 0.1f;
+        if (lineLen > 30.0f) lineLen = 30.0f;
+
+        float lineThick = 3.0f;
+
+        DrawLineEx({ rect.x, rect.y }, { rect.x + lineLen, rect.y }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x, rect.y }, { rect.x, rect.y + lineLen }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width - lineLen, rect.y + rect.height }, lineThick, Theme::COL_ACCENT);
+        DrawLineEx({ rect.x + rect.width, rect.y + rect.height }, { rect.x + rect.width, rect.y + rect.height - lineLen }, lineThick, Theme::COL_ACCENT);
 
         if (title) {
-            float fontSize = 24.0f;
+            float fontSize = rect.height * 0.08f;
+            if (fontSize < 24.0f) fontSize = 24.0f;
+            if (fontSize > 48.0f) fontSize = 48.0f;
+
             float spacing = 1.0f;
             Vector2 textSize = MeasureTextEx(font, title, fontSize, spacing);
 
+            float labelPad = 10.0f;
             float labelX = rect.x + 20;
-            float labelY = rect.y - 12;
-            float labelW = textSize.x + 20;
-            float labelH = 24;
+            float labelY = rect.y - (textSize.y / 2);
+            float labelW = textSize.x + (labelPad * 2);
+            float labelH = textSize.y;
 
             DrawRectangle(labelX - 2, labelY, labelW + 4, labelH, Theme::COL_BACKGROUND);
             DrawRectangleLines(labelX, labelY, labelW, labelH, Theme::COL_ACCENT_DIM);
-            DrawTextEx(font, title, { labelX + 10, rect.y - 12 }, fontSize, spacing, Theme::COL_ACCENT);
+            DrawTextEx(font, title, { labelX + labelPad, labelY }, fontSize, spacing, Theme::COL_ACCENT);
         }
     }
 };
@@ -622,9 +640,12 @@ namespace Theme {
     }
 }
 // client\scenes\GameplayScene.cpp
-﻿#include "GameplayScene.h"
+﻿// client/scenes/GameplayScene.cpp
+#include "GameplayScene.h"
 #include "GameClient.h"
 #include <iostream>
+
+#define DEBUG
 
 GameplayScene::GameplayScene(GameClient* g) : Scene(g) {}
 
@@ -634,8 +655,9 @@ void GameplayScene::Enter() {
     camera.zoom = 1.0f;
     camera.offset = { w / 2, h / 2 };
 
-    // Сброс
     myPlayerId = 0;
+    isPredictedInit = false;
+    predictedPos = { 0, 0 };
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     leftStick = std::make_unique<VirtualJoystick>(Vector2{ 150, h - 150 }, 40.0f, 90.0f);
@@ -648,24 +670,25 @@ void GameplayScene::Exit() {
     if (game->netClient) game->netClient->disconnect();
     game->StopHost();
 }
+
 void GameplayScene::OnMessage(Message::Shared msg) {
     const auto& rawData = msg->stream()->buffer();
+    size_t offset = msg->stream()->tellg();
 
-    if (rawData.empty()) return;
+    if (rawData.empty() || offset >= rawData.size()) return;
 
-    InputAdapter adapter(rawData.begin(), rawData.end());
-
-    bitsery::Deserializer<InputAdapter> deserializer(adapter);
+    InputAdapter adapter(rawData.begin() + offset, rawData.end());
+    bitsery::Deserializer<InputAdapter> deserializer(std::move(adapter));
 
     uint8_t packetTypeInt = 0;
     deserializer.value1b(packetTypeInt);
 
-    if (adapter.error() != bitsery::ReaderError::NoError) return;
+    if (deserializer.adapter().error() != bitsery::ReaderError::NoError) return;
 
     if (packetTypeInt == GamePacket::INIT) {
         InitPacket pkt;
         deserializer.object(pkt);
-        if (adapter.error() == bitsery::ReaderError::NoError) {
+        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             myPlayerId = pkt.playerId;
             TraceLog(LOG_INFO, "INIT received. My ID: %d", myPlayerId);
         }
@@ -674,9 +697,29 @@ void GameplayScene::OnMessage(Message::Shared msg) {
         WorldSnapshotPacket snap;
         deserializer.object(snap);
 
-        if (adapter.error() == bitsery::ReaderError::NoError) {
+        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             snapshotManager.PushSnapshot(snap);
             lastServerTime = snap.serverTime;
+
+            for (const auto& ent : snap.entities) {
+                if (ent.id == myPlayerId) {
+                    if (!isPredictedInit) {
+                        predictedPos = ent.position;
+                        predictedRot = ent.rotation;
+                        isPredictedInit = true;
+                    }
+                    else {
+                        float dist = Vector2Distance(predictedPos, ent.position);
+                        if (dist > 50.0f) {
+                            predictedPos = ent.position;
+                        }
+                        else {
+                            predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
+                        }
+                    }
+                    break;
+                }
+            }
         }
     }
 }
@@ -684,18 +727,18 @@ void GameplayScene::OnMessage(Message::Shared msg) {
 void GameplayScene::Update(float dt) {
     clientTime += dt;
 
-
     if (abs(clientTime - lastServerTime) > 1.0) {
         clientTime = lastServerTime;
     }
     else {
-        clientTime = Lerp(clientTime, lastServerTime, 0.05f);
+        clientTime = Lerp((float)clientTime, (float)lastServerTime, 0.05f);
     }
 
     PlayerInputPacket pkt = {};
     pkt.movement = { 0, 0 };
     pkt.aimTarget = { 0, 0 };
     pkt.isShooting = false;
+    const float PLAYER_SPEED = 200.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     if (leftStick && rightStick) {
@@ -703,17 +746,16 @@ void GameplayScene::Update(float dt) {
         rightStick->Update();
         pkt.movement = leftStick->GetAxis();
 
+        if (isPredictedInit) {
+            predictedPos.x += pkt.movement.x * PLAYER_SPEED * dt;
+            predictedPos.y += pkt.movement.y * PLAYER_SPEED * dt;
+        }
+
         Vector2 aimDir = rightStick->GetAxis();
-        if (Vector2Length(aimDir) > 0.2f) {
+        if (Vector2Length(aimDir) > 0.1f) {
             pkt.isShooting = true;
-            if (!snapshotManager.history.empty()) {
-                for (auto& e : snapshotManager.history.back().entities) {
-                    if (e.id == myPlayerId) {
-                        pkt.aimTarget = Vector2Add(e.position, Vector2Scale(aimDir, 300.0f));
-                        break;
-                    }
-                }
-            }
+            pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(aimDir, 300.0f));
+            predictedRot = atan2f(aimDir.y, aimDir.x) * RAD2DEG;
         }
     }
 #else
@@ -721,17 +763,25 @@ void GameplayScene::Update(float dt) {
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
     if (IsKeyDown(KEY_D)) pkt.movement.x += 1.0f;
+
     if (Vector2Length(pkt.movement) > 1.0f) pkt.movement = Vector2Normalize(pkt.movement);
+
+    if (isPredictedInit) {
+        predictedPos.x += pkt.movement.x * PLAYER_SPEED * dt;
+        predictedPos.y += pkt.movement.y * PLAYER_SPEED * dt;
+    }
+
     pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
     pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+
+    Vector2 diff = Vector2Subtract(pkt.aimTarget, predictedPos);
+    predictedRot = atan2f(diff.y, diff.x) * RAD2DEG;
 #endif
 
     if (game->netClient && game->netClient->isConnected()) {
         Buffer buffer;
-
         OutputAdapter adapter(buffer);
-
-        bitsery::Serializer<OutputAdapter> serializer(adapter);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
 
         uint8_t type = GamePacket::INPUT;
         serializer.value1b(type);
@@ -742,43 +792,51 @@ void GameplayScene::Update(float dt) {
         game->netClient->send(DeliveryType::UNRELIABLE, stream);
     }
 
-
-    EntityState myState;
-    // Время рендера = (Текущее "Серверное" время на клиенте) - (Буфер 100мс)
-    double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
-
-    if (snapshotManager.GetInterpolatedState(myPlayerId, renderTime, myState)) {
-        camera.target = Vector2Lerp(camera.target, myState.position, 0.1f);
+    if (isPredictedInit) {
+        camera.target = Vector2Lerp(camera.target, predictedPos, 0.1f);
     }
 }
 
 void GameplayScene::Draw() {
     BeginMode2D(camera);
 
-    // Сетка и фон
-    ClearBackground(GetColor(0xF5F5F5FF));
+    ClearBackground(Theme::COL_BACKGROUND);
     int gridW = 2000; int gridH = 2000;
     for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(GRAY, 0.2f));
     for (int i = 0; i <= gridH; i += 50) DrawLine(0, i, gridW, i, Fade(GRAY, 0.2f));
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
 
-    // Отрисовка сущностей
-    // Мы не итерируемся по worldEntities (карты больше нет), мы итерируемся по IDs из последнего снапшота
-    // Но лучше собрать список всех уникальных ID из двух кадров интерполяции.
-    // Упростим: берем последний снапшот, чтобы знать КТО жив, но рисуем ГДЕ они были в renderTime.
+    if (isPredictedInit) {
+        Color myColor = BLUE;
+        DrawCircleV(predictedPos, 20.0f, myColor);
+        Vector2 barrelEnd = {
+            predictedPos.x + cosf(predictedRot * DEG2RAD) * 40,
+            predictedPos.y + sinf(predictedRot * DEG2RAD) * 40
+        };
+        DrawLineEx(predictedPos, barrelEnd, 15, DARKGRAY);
+    }
+
+#ifdef DEBUG
+    if (!snapshotManager.history.empty()) {
+        for (const auto& ent : snapshotManager.history.back().entities) {
+            if (ent.id == myPlayerId) {
+                DrawCircleV(ent.position, 20.0f, Fade(RED, 0.3f));
+                DrawLineV(predictedPos, ent.position, RED);
+                break;
+            }
+        }
+    }
+#endif
 
     if (!snapshotManager.history.empty()) {
-        const auto& latestSnap = snapshotManager.history.back();
-
-        // Время рендера с задержкой
         double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
+        const auto& latestEntities = snapshotManager.history.back().entities;
 
-        for (const auto& ent : latestSnap.entities) {
+        for (const auto& ent : latestEntities) {
+            if (ent.id == myPlayerId) continue;
+
             EntityState renderState;
-            // Пытаемся получить интерполированное состояние
             if (snapshotManager.GetInterpolatedState(ent.id, renderTime, renderState)) {
-
-                // Рисуем
                 if (renderState.type == EntityType::PLAYER) {
                     DrawCircleV(renderState.position, renderState.radius, renderState.color);
                     Vector2 barrelEnd = {
@@ -787,7 +845,6 @@ void GameplayScene::Draw() {
                     };
                     DrawLineEx(renderState.position, barrelEnd, 15, DARKGRAY);
 
-                    // HP Bar
                     float hpPct = renderState.health / renderState.maxHealth;
                     if (renderState.maxHealth > 0) {
                         DrawRectangle((int)renderState.position.x - 20, (int)renderState.position.y - 40, 40, 5, RED);
@@ -800,7 +857,6 @@ void GameplayScene::Draw() {
             }
         }
     }
-
     EndMode2D();
 }
 
@@ -816,21 +872,24 @@ void GameplayScene::DrawGUI() {
     if (rightStick) rightStick->Draw();
 #endif
 
+#ifdef DEBUG
+    DrawText("DEBUG MODE", 10, 40, 20, RED);
+    DrawText(TextFormat("Ping (fake): %.2f ms", snapshotManager.INTERPOLATION_DELAY * 1000), 10, 60, 20, GREEN);
+#endif
+
     if (GuiButton(Rectangle{ (float)game->GetWidth() - 100, 10, 90, 30 }, "DISCONNECT")) {
         game->ReturnToMenu();
     }
 }
 // client\scenes\GameplayScene.h
-﻿// client/scenes/GameplayScene.h
-#pragma once
+﻿#pragma once
 #include "../../engine/Scenes/Scene.h"
 #include "../../common/NetworkPackets.h"
 #include "SnapshotManager.h"
 #include "../vircontrols/VirtualJoystick.h"
 #include <memory>
-
+#include "Theme.h"
 class GameClient;
-
 class GameplayScene : public Scene {
     Camera2D camera = { 0 };
 
@@ -840,6 +899,10 @@ class GameplayScene : public Scene {
     double lastServerTime = 0.0;
 
     uint32_t myPlayerId = 0;
+
+    Vector2 predictedPos = { 0, 0 };
+    float predictedRot = 0.0f;
+    bool isPredictedInit = false;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     std::unique_ptr<VirtualJoystick> leftStick;
@@ -865,93 +928,97 @@ public:
 #include "raygui_wrapper.h"
 #include "../GameClient.h"
 #include "engine/Utils/ConfigManager.h"
-#include "../ResourceManager.h" 
-#include "../Theme.h"          
+#include "ResourceManager.h"
+#include "Theme.h"
 #include <cstring>
 #include <string>
 #include <thread>
 #include <chrono>
-
 MainMenuScene::MainMenuScene(GameClient* g) : Scene(g) {}
-
 void MainMenuScene::Enter() {
-    Theme::ApplyTheme();
-    ResourceManager::Get().Load();
+	Theme::ApplyTheme();
+	ResourceManager::Get().Load();
+	ClientConfig& cfg = ConfigManager::GetClient();
+	strcpy(ipBuffer, cfg.lastIp.c_str());
+	sprintf(portBuffer, "%d", cfg.lastPort);
+	strcpy(nameBuffer, cfg.playerName.c_str());
 
-    ClientConfig& cfg = ConfigManager::GetClient();
-    strcpy(ipBuffer, cfg.lastIp.c_str());
-    sprintf(portBuffer, "%d", cfg.lastPort);
-    strcpy(nameBuffer, cfg.playerName.c_str());
-
-    currentState = MenuState::MAIN;
-    virtualKeyboard.Hide();
+	currentState = MenuState::MAIN;
+	virtualKeyboard.Hide();
 }
-
 void MainMenuScene::Exit() {
-    ClientConfig& cfg = ConfigManager::GetClient();
-    cfg.playerName = nameBuffer;
-    cfg.lastIp = ipBuffer;
-    cfg.lastPort = atoi(portBuffer);
-    ConfigManager::Save();
+	ClientConfig& cfg = ConfigManager::GetClient();
+	cfg.playerName = nameBuffer;
+	cfg.lastIp = ipBuffer;
+	cfg.lastPort = atoi(portBuffer);
+	ConfigManager::Save();
 }
-
 void MainMenuScene::Update(float dt) {
-    ResourceManager::Get().UpdateBackground(dt);
+	ResourceManager::Get().UpdateBackground(dt);
 }
-
 bool MainMenuScene::DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode) {
-#if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(__ANDROID__)
-    if (GuiTextBox(bounds, buffer, bufferSize, false)) {
-        if (!virtualKeyboard.IsActive()) virtualKeyboard.Show(buffer, bufferSize);
-    }
-    return false;
+#if defined(PLATFORM_ANDROID) || defined(ANDROID) || defined(ANDROID)
+	if (GuiTextBox(bounds, buffer, bufferSize, false)) {
+		if (!virtualKeyboard.IsActive()) virtualKeyboard.Show(buffer, bufferSize);
+	}
+	return false;
 #else
-    if (GuiTextBox(bounds, buffer, bufferSize, editMode)) {
-        editMode = !editMode;
-        return true;
-    }
-    return false;
+	if (GuiTextBox(bounds, buffer, bufferSize, editMode)) {
+		editMode = !editMode;
+		return true;
+	}
+	return false;
 #endif
 }
-
 void MainMenuScene::Draw() {
-    ResourceManager::Get().DrawBackground();
+	ResourceManager::Get().DrawBackground();
+	int w = GetScreenWidth();
+	int h = GetScreenHeight();
+	float cx = w / 2.0f;
+	float uiScale = game->GetUIScale();
 
-    int w = GetScreenWidth();
-    int h = GetScreenHeight();
-    float cx = w / 2.0f;
+	const char* title = ConfigManager::Text("title_void_assault");
+	float fontSize = 60.0f * uiScale;
 
-    const char* title = ConfigManager::Text("title_void_assault");
-    int fontSize = (h < 500) ? 40 : 60;
-#if defined(PLATFORM_ANDROID)
-    fontSize = 70;
-#endif
+	Font font = ConfigManager::GetFont();
+	Vector2 titleSize = MeasureTextEx(font, title, fontSize, 2);
 
-    Font font = ConfigManager::GetFont();
-    Vector2 titleSize = MeasureTextEx(font, title, (float)fontSize, 2);
-    DrawTextEx(font, title, { cx - titleSize.x / 2 + 4, 64 }, (float)fontSize, 2, Fade(BLACK, 0.5f));
-    DrawTextEx(font, title, { cx - titleSize.x / 2, 60 }, (float)fontSize, 2, Theme::COL_ACCENT);
+	float titleY = h * 0.1f;
+
+	DrawTextEx(font, title, { cx - titleSize.x / 2 + 4, titleY + 4 }, fontSize, 2, Fade(BLACK, 0.5f));
+	DrawTextEx(font, title, { cx - titleSize.x / 2, titleY }, fontSize, 2, Theme::COL_ACCENT);
 }
-
 void MainMenuScene::DrawGUI() {
     int w = GetScreenWidth();
     int h = GetScreenHeight();
     float cx = w / 2.0f;
+    float cy = h / 2.0f;
+    float uiScale = game->GetUIScale();
     Font font = ConfigManager::GetFont();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale));
 
     bool kbdActive = virtualKeyboard.IsActive();
     if (kbdActive) GuiDisable();
 
     if (currentState == MenuState::MAIN) {
-        float startY = 220;
-        float btnW = 320;
-        float btnH = 50;
-        float spacing = 20;
+        float btnW = 320 * uiScale;
+        float btnH = 60 * uiScale;
+        float spacing = 25 * uiScale;
+        int btnCount = 4;
 
-        Rectangle menuRect = { cx - btnW / 2 - 20, startY - 20, btnW + 40, (btnH + spacing) * 4 + 40 };
-        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.0.2", font);
+        float totalHeight = (btnH * btnCount) + (spacing * (btnCount - 1));
+        float panelPadding = 40 * uiScale;
+        float panelW = btnW + (panelPadding * 2);
+        float panelH = totalHeight + (panelPadding * 2);
 
-        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
+        float panelY = (h - panelH) / 2.0f + (h * 0.05f);
+
+        Rectangle menuRect = { cx - panelW / 2, panelY, panelW, panelH };
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.0.3", font);
+
+        float currentY = panelY + panelPadding;
+
+        if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
             std::thread([this]() {
                 int realPort = game->StartHost(7777);
                 if (realPort > 0) {
@@ -960,58 +1027,61 @@ void MainMenuScene::DrawGUI() {
                 }
                 }).detach();
         }
-        startY += btnH + spacing;
+        currentY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
+        if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_multiplayer"))) {
             currentState = MenuState::MULTIPLAYER;
         }
-        startY += btnH + spacing;
+        currentY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
+        if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_settings"))) {
             currentState = MenuState::SETTINGS;
         }
-        startY += btnH + spacing;
+        currentY += btnH + spacing;
 
-        if (GuiButton({ cx - btnW / 2, startY, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
+        if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_exit"))) {
             CloseWindow();
         }
     }
     else if (currentState == MenuState::MULTIPLAYER) {
-        float panelW = 600;
-        float panelH = 440;
-        float panelY = 100;
+        float panelW = w * 0.8f;
+        if (panelW > 600 * uiScale) panelW = 600 * uiScale;
+
+        float panelH = h * 0.7f;
+        float panelY = (h - panelH) / 2.0f;
 
         Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
         ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_multiplayer"), font);
 
-        float contentX = panelRect.x + 40;
-        float contentY = panelRect.y + 45;
-        float contentW = panelW - 80;
+        float contentPad = 30 * uiScale;
+        float contentX = panelRect.x + contentPad;
+        float contentY = panelRect.y + contentPad * 1.5f;
+        float contentW = panelRect.width - (contentPad * 2);
+        float fieldH = 40 * uiScale;
+        float lblH = 25 * uiScale;
+        float spacing = 15 * uiScale;
 
-        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_nickname"));
-        contentY += 20;
-        DrawInputField({ contentX, contentY, contentW, 30 }, nameBuffer, 32, isEditingName);
+        GuiLabel({ contentX, contentY, contentW, lblH }, ConfigManager::Text("lbl_nickname"));
+        contentY += lblH;
+        DrawInputField({ contentX, contentY, contentW, fieldH }, nameBuffer, 32, isEditingName);
         if (!isEditingName && !kbdActive) ConfigManager::GetClient().playerName = nameBuffer;
+        contentY += fieldH + spacing;
 
-        contentY += 40;
-
-
-        GuiToggleGroup({ contentX, contentY, contentW/2, 40 }, ConfigManager::Text("tabs_multiplayer"), &activeMpTab);
-        contentY += 50;
+        GuiToggleGroup({ contentX, contentY, contentW / 2, fieldH }, ConfigManager::Text("tabs_multiplayer"), &activeMpTab);
+        contentY += fieldH + spacing * 1.5f;
 
         if (activeMpTab == 0) {
+            GuiLabel({ contentX, contentY, contentW, lblH }, ConfigManager::Text("lbl_ip"));
+            contentY += lblH;
+            DrawInputField({ contentX, contentY, contentW, fieldH }, ipBuffer, 64, isEditingIp);
+            contentY += fieldH + spacing;
 
-            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_ip"));
-            contentY += 20;
-            DrawInputField({ contentX, contentY, contentW, 30 }, ipBuffer, 64, isEditingIp);
-            contentY += 35;
+            GuiLabel({ contentX, contentY, contentW, lblH }, ConfigManager::Text("lbl_port"));
+            contentY += lblH;
+            DrawInputField({ contentX, contentY, contentW * 0.3f, fieldH }, portBuffer, 16, isEditingPort);
+            contentY += fieldH + spacing * 1.5f;
 
-            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_port"));
-            contentY += 20;
-            DrawInputField({ contentX, contentY, 100, 30 }, portBuffer, 16, isEditingPort);
-            contentY += 45;
-
-            if (GuiButton({ contentX, contentY, contentW, 40 }, ConfigManager::Text("btn_join"))) {
+            if (GuiButton({ contentX, contentY, contentW, fieldH * 1.2f }, ConfigManager::Text("btn_join"))) {
                 ConfigManager::GetClient().lastIp = ipBuffer;
                 ConfigManager::GetClient().lastPort = atoi(portBuffer);
                 ConfigManager::Save();
@@ -1019,56 +1089,60 @@ void MainMenuScene::DrawGUI() {
             }
         }
         else {
-            GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_port"));
-            contentY += 20;
-            DrawInputField({ contentX, contentY, 100, 30 }, portBuffer, 16, isEditingPort);
-            contentY += 45;
+            GuiLabel({ contentX, contentY, contentW, lblH }, ConfigManager::Text("lbl_port"));
+            contentY += lblH;
+            DrawInputField({ contentX, contentY, contentW * 0.3f, fieldH }, portBuffer, 16, isEditingPort);
+            contentY += fieldH + spacing * 2.0f;
 
-            if (GuiButton({ contentX, contentY, contentW, 40 }, ConfigManager::Text("btn_create_lobby"))) {
+            if (GuiButton({ contentX, contentY, contentW, fieldH * 1.2f }, ConfigManager::Text("btn_create_lobby"))) {
                 int port = atoi(portBuffer);
                 int p = game->StartHost(port);
                 if (p > 0) game->netClient->connect("127.0.0.1", p);
             }
         }
 
-        float backBtnY = panelRect.y + panelRect.height + 15;
-        if (backBtnY + 40 > GetScreenHeight()) {
-            backBtnY = GetScreenHeight() - 50.0f;
-        }
+        float backBtnH = 50 * uiScale;
+        float backBtnY = panelRect.y + panelRect.height + spacing;
+        if (backBtnY + backBtnH > h) backBtnY = h - backBtnH - spacing;
 
-        if (GuiButton({ cx - 100, backBtnY, 200, 40 }, ConfigManager::Text("btn_back"))) {
+        if (GuiButton({ cx - (150 * uiScale), backBtnY, 300 * uiScale, backBtnH }, ConfigManager::Text("btn_back"))) {
             currentState = MenuState::MAIN;
         }
     }
     else if (currentState == MenuState::SETTINGS) {
-        float panelW = 400;
-        float panelH = 350;
-        float panelY = h / 2.0f - panelH / 2.0f;
+        float panelW = w * 0.7f;
+        if (panelW > 500 * uiScale) panelW = 500 * uiScale;
+        float panelH = 400 * uiScale;
+        float panelY = (h - panelH) / 2.0f;
 
         Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
         ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_settings"), font);
 
-        float contentX = panelRect.x + 30;
-        float contentY = panelRect.y + 50;
-        float contentW = panelW - 60;
+        float contentPad = 30 * uiScale;
+        float contentX = panelRect.x + contentPad;
+        float contentY = panelRect.y + contentPad * 1.5f;
+        float contentW = panelRect.width - (contentPad * 2);
+        float elemH = 40 * uiScale;
+        float spacing = 25 * uiScale;
 
-        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_master_vol"));
-        contentY += 25;
+        GuiLabel({ contentX, contentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_master_vol"));
+        contentY += 30 * uiScale;
         float vol = game->audio.GetVolume();
-        if (GuiSlider({ contentX, contentY, contentW, 30 }, "0%", "100%", &vol, 0.0f, 1.0f)) {
+        if (GuiSlider({ contentX, contentY, contentW, elemH }, "0%", "100%", &vol, 0.0f, 1.0f)) {
             game->audio.SetVolume(vol);
         }
-        contentY += 60;
+        contentY += elemH + spacing;
 
-        GuiLabel({ contentX, contentY, contentW, 20 }, ConfigManager::Text("lbl_language"));
-        contentY += 25;
+        GuiLabel({ contentX, contentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_language"));
+        contentY += 30 * uiScale;
         std::string langBtnText = "< " + ConfigManager::GetCurrentLangName() + " >";
-        if (GuiButton({ contentX, contentY, contentW, 40 }, langBtnText.c_str())) {
+        if (GuiButton({ contentX, contentY, contentW, elemH }, langBtnText.c_str())) {
             ConfigManager::CycleLanguage();
         }
-        contentY += 60;
 
-        if (GuiButton({ cx - 100, panelRect.y + panelRect.height + 20, 200, 40 }, ConfigManager::Text("btn_back"))) {
+        float backBtnH = 50 * uiScale;
+        float backBtnY = panelRect.y + panelRect.height + spacing;
+        if (GuiButton({ cx - (150 * uiScale), backBtnY, 300 * uiScale, backBtnH }, ConfigManager::Text("btn_back"))) {
             game->ReturnToMenu();
             currentState = MenuState::MAIN;
         }
@@ -1149,47 +1223,64 @@ void SettingsScene::Draw() {
 	ResourceManager::Get().DrawBackground();
 }
 void SettingsScene::DrawGUI() {
-	float w = (float)game->GetWidth();
-	float h = (float)game->GetHeight();
+	int w = game->GetWidth();
+	int h = game->GetHeight();
 	float cx = w / 2.0f;
-	float cy = h / 2.0f - 200;
-	Rectangle panelRect = { cx - 250, cy - 20, 500, 450 };
+	float uiScale = game->GetUIScale();
+	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale));
+
+	float panelW = w * 0.8f;
+	if (panelW > 600 * uiScale) panelW = 600 * uiScale;
+
+	int items = 2;
+#if !defined(PLATFORM_ANDROID) && !defined(ANDROID)
+	items++;
+#endif
+	float elemH = 40 * uiScale;
+	float spacing = 30 * uiScale;
+	float padding = 40 * uiScale;
+	float panelH = (padding * 2) + (items * (elemH + spacing + 30 * uiScale));
+	float panelY = (h - panelH) / 2.0f;
+
+	Rectangle panelRect = { cx - panelW / 2, panelY, panelW, panelH };
 	ResourceManager::DrawSciFiPanel(panelRect, ConfigManager::Text("btn_settings"), ConfigManager::GetFont());
 
-	float contentX = cx - 200;
-	float currentY = cy + 40;
-	float width = 400;
+	float contentX = panelRect.x + padding;
+	float currentY = panelRect.y + padding + 10 * uiScale;
+	float contentW = panelRect.width - (padding * 2);
 
-	GuiLabel({ contentX, currentY, width, 20 }, ConfigManager::Text("lbl_master_vol"));
-	currentY += 25;
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_master_vol"));
+	currentY += 30 * uiScale;
 	float vol = game->audio.GetVolume();
-	if (GuiSlider({ contentX, currentY, width, 30 }, "0%", "100%", &vol, 0.0f, 1.0f)) {
+	if (GuiSlider({ contentX, currentY, contentW, elemH }, "0%", "100%", &vol, 0.0f, 1.0f)) {
 		game->audio.SetVolume(vol);
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 
-	GuiLabel({ contentX, currentY, width, 20 }, ConfigManager::Text("lbl_language"));
-	currentY += 25;
-
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, ConfigManager::Text("lbl_language"));
+	currentY += 30 * uiScale;
 	std::string langBtnText = "< " + ConfigManager::GetCurrentLangName() + " >";
-	if (GuiButton({ contentX, currentY, width, 40 }, langBtnText.c_str())) {
+	if (GuiButton({ contentX, currentY, contentW, elemH }, langBtnText.c_str())) {
 		ConfigManager::CycleLanguage();
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 #if !defined(PLATFORM_ANDROID) && !defined(ANDROID)
-	GuiLabel({ contentX, currentY, width, 20 }, "Resolution");
-	currentY += 25;
+	GuiLabel({ contentX, currentY, contentW, 25 * uiScale }, "Resolution");
+	currentY += 30 * uiScale;
 	std::string resText = std::to_string((int)resolutions[currentResIndex].x) + "x" + std::to_string((int)resolutions[currentResIndex].y);
-	if (GuiButton({ contentX, currentY, width, 40 }, resText.c_str())) {
+	if (GuiButton({ contentX, currentY, contentW, elemH }, resText.c_str())) {
 		currentResIndex = (currentResIndex + 1) % resolutions.size();
 		ConfigManager::GetClient().resolutionWidth = (int)resolutions[currentResIndex].x;
 		ConfigManager::GetClient().resolutionHeight = (int)resolutions[currentResIndex].y;
 		ConfigManager::Save();
 		SetWindowSize((int)resolutions[currentResIndex].x, (int)resolutions[currentResIndex].y);
 	}
-	currentY += 60;
+	currentY += elemH + spacing;
 #endif
-	if (GuiButton({ cx - 100, panelRect.y + panelRect.height + 20, 200, 40 }, ConfigManager::Text("btn_back"))) {
+	float backBtnH = 50 * uiScale;
+	float backBtnY = panelRect.y + panelRect.height + spacing;
+
+	if (GuiButton({ cx - (150 * uiScale), backBtnY, 300 * uiScale, backBtnH }, ConfigManager::Text("btn_back"))) {
 		game->ReturnToMenu();
 	}
 }
@@ -1736,6 +1827,7 @@ struct PlayerInputPacket {
         s.boolValue(isShooting);
     }
 };
+
 struct EntityState {
     uint32_t id;
     Vector2 position;
@@ -1754,7 +1846,10 @@ struct EntityState {
         s.value4b(health);
         s.value4b(maxHealth);
 
-        s.value1b(reinterpret_cast<uint8_t&>(type));
+        // БЕЗОПАСНАЯ СЕРИАЛИЗАЦИЯ ENUM
+        uint8_t typeInt = static_cast<uint8_t>(type);
+        s.value1b(typeInt);
+        type = static_cast<EntityType>(typeInt);
 
         s.value4b(radius);
         s.object(color);
@@ -1768,7 +1863,7 @@ struct WorldSnapshotPacket {
     template <typename S>
     void serialize(S& s) {
         s.value8b(serverTime);
-        s.container(entities, 10000); 
+        s.container(entities, 10000);
     }
 };
 
@@ -3323,8 +3418,7 @@ std::string format(std::time_t);
 }
 
 // engine\CMakeLists.txt
-﻿#Engine module CMakeLists.txt
-add_library(GameEngine SHARED
+﻿add_library(GameEngine SHARED
     Utils/ConfigManager.h
     Utils/ConfigManager.cpp
     ECS/GameObject.h
@@ -3334,7 +3428,7 @@ add_library(GameEngine SHARED
     ServerHost.h
  "ServerHost.h"
  ServerHost.cpp
- "Utils/ConfigManager.h")
+ "Utils/ConfigManager.h" "ECS/PhysicsUtils.h")
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${BITSTERY_EXTERNAL_INCLUDE_DIR})
@@ -3351,12 +3445,10 @@ endif()
 #include "chipmunk/chipmunk.h"
 
 
-// Конвертация Raylib Vector2 -> Chipmunk cpVect
 inline cpVect ToCp(Vector2 v) {
     return cpv(v.x, v.y);
 }
 
-// Конвертация Chipmunk cpVect -> Raylib Vector2
 inline Vector2 ToRay(cpVect v) {
     return Vector2{ (float)v.x, (float)v.y };
 }
@@ -3375,9 +3467,21 @@ inline Vector2 ToRay(cpVect v) {
 #include "../common/NetworkPackets.h"
 #include <iostream>
 #include <chrono>
+#include <cmath>
+#include <iomanip>
+
+#if defined(__linux__) || defined(__APPLE__)
+#include <signal.h>
+#endif
+
+double GetSystemTime() {
+    static auto start = std::chrono::high_resolution_clock::now();
+    auto now = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> diff = now - start;
+    return diff.count();
+}
 
 ServerHost::ServerHost() : running(false) {
-
     netServer = ENetServer::alloc();
 }
 
@@ -3388,6 +3492,9 @@ ServerHost::~ServerHost() {
 bool ServerHost::Start(int port) {
     if (running) return false;
 
+#if defined(__linux__) || defined(__APPLE__)
+    signal(SIGPIPE, SIG_IGN);
+#endif
 
     if (!netServer->start(port)) {
         std::cerr << "SERVER: Failed to start on port " << port << std::endl;
@@ -3415,12 +3522,37 @@ void ServerHost::ServerLoop() {
     const double dt = 1.0 / 60.0;
     double snapshotTimer = 0.0;
 
+    double debugLogTimer = 0.0;
+
+    std::cout << "SERVER: Loop started. Tick rate: " << dt << std::endl;
+
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
-        std::chrono::duration<double> frameTime = currentTime - lastTime;
+        std::chrono::duration<double> frameTimeWrapper = currentTime - lastTime;
+        double frameTime = frameTimeWrapper.count();
         lastTime = currentTime;
-        accumulator += frameTime.count();
-        snapshotTimer += frameTime.count();
+
+        if (std::isnan(frameTime) || frameTime < 0.0) {
+            frameTime = 0.001;
+            std::cerr << "WARNING: NaN frame time detected!" << std::endl;
+        }
+
+        if (frameTime > 0.25) {
+            // std::cerr << "WARNING: Lag spike detected: " << frameTime << "s" << std::endl;
+            frameTime = 0.25;
+        }
+
+        accumulator += frameTime;
+        snapshotTimer += frameTime;
+        debugLogTimer += frameTime;
+
+        if (debugLogTimer > 5.0) {
+            std::cout << "SERVER ALIVE: Time: " << GetSystemTime()
+                << " Clients: " << netServer->numClients()
+                << " Objects: " << gameScene.objects.size() << std::endl;
+            debugLogTimer = 0.0;
+        }
+
 
         auto msgs = netServer->poll();
 
@@ -3432,10 +3564,18 @@ void ServerHost::ServerLoop() {
 
                 auto player = gameScene.CreatePlayerWithId(peerId);
 
-                auto stream = StreamBuffer::alloc();
-                stream->write((uint8_t)GamePacket::INIT);
-                stream->write(player->id);
+                InitPacket initPkt;
+                initPkt.playerId = player->id;
 
+                Buffer buffer;
+                OutputAdapter adapter(buffer);
+                bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+
+                serializer.value1b(GamePacket::INIT);
+                serializer.object(initPkt);
+                serializer.adapter().flush();
+
+                auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
                 netServer->send(peerId, DeliveryType::RELIABLE, stream);
             }
             else if (msg->type() == MessageType::DISCONNECT) {
@@ -3443,29 +3583,50 @@ void ServerHost::ServerLoop() {
                 gameScene.objects.erase(peerId);
             }
             else if (msg->type() == MessageType::DATA) {
-                auto stream = msg->stream();
-                uint8_t packetType = 0;
-                stream->read(packetType);
+                const auto& buffer = msg->stream()->buffer();
+                size_t offset = msg->stream()->tellg();
+
+                if (buffer.empty() || offset >= buffer.size()) continue;
+
+                InputAdapter adapter(buffer.begin() + offset, buffer.end());
+                bitsery::Deserializer<InputAdapter> des(std::move(adapter));
+
+                uint8_t packetType;
+                des.value1b(packetType);
 
                 if (packetType == GamePacket::INPUT) {
-                    PlayerInputPacket input;
-                    stream >> input;
+                    PlayerInputPacket input = {};
+                    des.object(input);
 
-                    if (gameScene.objects.count(peerId)) {
-                        auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                        if (p) {
-                            p->ApplyInput(input.movement);
-                            p->aimTarget = input.aimTarget;
-                            p->wantsToShoot = input.isShooting;
+                    if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                        if (gameScene.objects.count(peerId)) {
+                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                            if (p) {
+                              
+                                if (std::isfinite(input.movement.x) && std::isfinite(input.movement.y)) {
+                                    p->ApplyInput(input.movement);
+                                    p->aimTarget = input.aimTarget;
+                                    p->wantsToShoot = input.isShooting;
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
+
+        int physicsSteps = 0;
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
+            physicsSteps++;
+
+           
+            if (physicsSteps > 5) {
+                accumulator = 0;
+                break;
+            }
         }
 
         if (snapshotTimer >= 0.05) {
@@ -3481,14 +3642,22 @@ void ServerHost::BroadcastSnapshot() {
     if (netServer->numClients() == 0) return;
 
     WorldSnapshotPacket snap;
-    snap.serverTime = GetTime();
+    snap.serverTime = GetSystemTime();
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
         state.id = obj->id;
 
         if (obj->body) {
-            state.position = ToRay(cpBodyGetPosition(obj->body));
+            cpVect pos = cpBodyGetPosition(obj->body);
+            if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
+                pos = cpv(0, 0);
+                cpBodySetPosition(obj->body, pos);
+                cpBodySetVelocity(obj->body, cpv(0, 0));
+                std::cerr << "WARN: Resetting body " << id << " due to NaN position" << std::endl;
+            }
+
+            state.position = ToRay(pos);
             state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
         }
         else {
@@ -3506,12 +3675,12 @@ void ServerHost::BroadcastSnapshot() {
 
     Buffer buffer;
     OutputAdapter adapter(buffer);
-    bitsery::Serializer<OutputAdapter> serializer(adapter);
+    bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
 
     uint8_t type = GamePacket::SNAPSHOT;
     serializer.value1b(type);
     serializer.object(snap);
-    serializer.adapter().flush(); 
+    serializer.adapter().flush();
 
     auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
     netServer->broadcast(DeliveryType::UNRELIABLE, stream);
@@ -3562,9 +3731,17 @@ public:
         color = BLACK;
         float moveSpeed = 600.0f;
 
+        if (dir.x == 0 && dir.y == 0) {
+            dir = { 1.0f, 0.0f };
+        }
+
+        Vector2 normDir = Vector2Normalize(dir);
+        if (isnan(normDir.x) || isnan(normDir.y)) {
+            normDir = { 1.0f, 0.0f };
+        }
+
         cpFloat radius = 5.0;
         cpFloat mass = 1.0;
-        // Пуля - кинематический или легкий динамический объект
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
 
         body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
@@ -3575,8 +3752,6 @@ public:
         cpShapeSetCollisionType(shape, COLLISION_BULLET);
         cpShapeSetUserData(shape, (void*)this);
 
-        // Задаем скорость
-        Vector2 normDir = Vector2Normalize(dir);
         cpBodySetVelocity(body, cpv(normDir.x * moveSpeed, normDir.y * moveSpeed));
     }
 
@@ -3594,7 +3769,6 @@ public:
 #include "chipmunk/chipmunk.h"
 #include "../../common/NetworkPackets.h"
 
-// Определяем типы коллизий для фильтрации (понадобится в будущем)
 enum CollisionType {
     COLLISION_PLAYER = 1,
     COLLISION_BULLET = 2,
@@ -3606,10 +3780,9 @@ public:
     uint32_t id;
     EntityType type;
 
-    // Ссылки на физические объекты
     cpBody* body = nullptr;
     cpShape* shape = nullptr;
-    cpSpace* spaceRef = nullptr; // Ссылка на мир для очистки
+    cpSpace* spaceRef = nullptr;
 
     bool destroyFlag = false;
     Color color = RED;
@@ -3634,6 +3807,29 @@ public:
 
     virtual void Update(float dt) = 0;
 };
+// engine\ECS\PhysicsUtils.h
+﻿#pragma once
+#include "raylib_compatibility.h"
+#include "chipmunk/chipmunk.h"
+#include <cmath>
+
+inline float SanitizeFloat(float val) {
+    if (!std::isfinite(val)) return 0.0f;
+    return val;
+}
+
+inline double SanitizeDouble(double val) {
+    if (!std::isfinite(val)) return 0.0;
+    return val;
+}
+
+inline cpVect ToCp(Vector2 v) {
+    return cpv(SanitizeFloat(v.x), SanitizeFloat(v.y));
+}
+
+inline Vector2 ToRay(cpVect v) {
+    return Vector2{ (float)SanitizeDouble(v.x), (float)SanitizeDouble(v.y) };
+}
 // engine\ECS\Player.h
 ﻿#pragma once
 #include "GameObject.h"
@@ -3642,7 +3838,7 @@ public:
 
 class Player : public GameObject {
 public:
-    float speed = 200.0f; // Сила/Скорость движения
+    float speed = 200.0f;
     float shootCooldown = 0.0f;
     const float FIRE_RATE = 0.2f;
 
@@ -3655,7 +3851,6 @@ public:
         spaceRef = space;
         color = BLUE;
 
-        // 1. Создаем тело (масса 10, инерция для круга)
         cpFloat radius = 20.0;
         cpFloat mass = 10.0;
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
@@ -3663,23 +3858,19 @@ public:
         body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
         cpBodySetPosition(body, ToCp(startPos));
 
-        // Отключаем вращение от коллизий (бесконечная инерция)
         cpBodySetMoment(body, INFINITY);
-
-        // 2. Создаем форму (коллизию)
         shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
         cpShapeSetFriction(shape, 0.7);
-        cpShapeSetElasticity(shape, 0.1); // Упругость
+        cpShapeSetElasticity(shape, 0.1);
         cpShapeSetCollisionType(shape, COLLISION_PLAYER);
 
-        // Pointer на самого себя для логики коллизий
         cpShapeSetUserData(shape, (void*)this);
     }
 
     void Update(float dt) override {
         if (shootCooldown > 0) shootCooldown -= dt;
 
-        // Позиция для стрельбы и камеры
+        
         Vector2 pos = ToRay(cpBodyGetPosition(body));
 
         if (wantsToShoot && shootCooldown <= 0) {
@@ -3688,25 +3879,40 @@ public:
             bulletDir = Vector2Subtract(aimTarget, pos);
         }
 
-        // Вычисляем угол поворота (визуально)
         Vector2 diff = Vector2Subtract(aimTarget, pos);
         rotation = atan2(diff.y, diff.x) * RAD2DEG;
 
-        // Передаем угол в физику (хоть она и не вращается от ударов)
         cpBodySetAngle(body, atan2(diff.y, diff.x));
 
-        // Линейное затухание (трение о воздух/землю)
-        // В Chipmunk это делается через damping space, но можно и вручную:
         cpVect vel = cpBodyGetVelocity(body);
-        cpBodySetVelocity(body, cpvmult(vel, 0.90f)); // Торможение
+        cpBodySetVelocity(body, cpvmult(vel, 0.90f));
     }
 
     void ApplyInput(Vector2 move) {
-        if (body) {
-            // Прямая установка скорости для четкого управления
-            // (или можно использовать forces для "ледяного" управления)
-            cpBodySetVelocity(body, cpv(move.x * speed, move.y * speed));
+        if (!body) return;
+
+
+        if (!std::isfinite(move.x) || !std::isfinite(move.y)) {
+            move = { 0, 0 };
         }
+
+
+        float length = Vector2Length(move);
+        if (length > 1.0f) {
+            move = Vector2Normalize(move);
+
+            if (!std::isfinite(move.x)) move = { 0, 0 };
+        }
+
+        float targetX = move.x * speed;
+        float targetY = move.y * speed;
+
+        if (!std::isfinite(targetX)) targetX = 0;
+        if (!std::isfinite(targetY)) targetY = 0;
+
+        cpBodySetVelocity(body, cpv(targetX, targetY));
+
+        cpBodySetAngularVelocity(body, 0.0f);
     }
 };
 // engine\Scenes\GameScene.h
@@ -3723,7 +3929,7 @@ class GameScene {
 public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
-    uint32_t nextId = 1000; // Начинаем с 1000, чтобы не пересекаться с PeerID (0-64), хотя это не критично
+    uint32_t nextId = 1000;
     float width = 2000;
     float height = 2000;
 
@@ -3740,13 +3946,14 @@ public:
 
     void CreateMapBoundaries() {
         cpBody* staticBody = cpSpaceGetStaticBody(space);
-        float w = width;
-        float h = height;
+
+        float w = (width > 0) ? width : 2000;
+        float h = (height > 0) ? height : 2000;
         float thick = 20.0f;
 
         auto addWall = [&](Vector2 a, Vector2 b) {
             cpShape* wall = cpSpaceAddShape(space, cpSegmentShapeNew(staticBody, ToCp(a), ToCp(b), thick));
-            cpShapeSetElasticity(wall, 0.5f);
+            cpShapeSetElasticity(wall, 0.0f);
             cpShapeSetFriction(wall, 1.0f);
             cpShapeSetCollisionType(wall, COLLISION_WALL);
             };
@@ -3757,15 +3964,15 @@ public:
         addWall({ w,0 }, { w, h });
     }
 
-    // Создание игрока с конкретным ID (от ENet)
     std::shared_ptr<Player> CreatePlayerWithId(uint32_t id) {
-        Vector2 startPos = { width / 2, height / 2 };
+        Vector2 startPos = { width / 2.0f, height / 2.0f };
+
+
         auto p = std::make_shared<Player>(id, startPos, space);
         objects[id] = p;
         return p;
     }
 
-    // Обычное создание (для ботов)
     std::shared_ptr<Player> CreatePlayer() {
         return CreatePlayerWithId(nextId++);
     }
@@ -3784,7 +3991,6 @@ public:
                 if (p && p->spawnBulletSignal) {
                     p->spawnBulletSignal = false;
                     Vector2 spawnPos = ToRay(cpBodyGetPosition(p->body));
-                    // ID пули генерируем сами
                     auto b = std::make_shared<Bullet>(nextId++, spawnPos, p->bulletDir, p->id, space);
                     newBullets.push_back(b);
                 }
@@ -3820,7 +4026,10 @@ public:
 
                     if (pObj->health <= 0) {
                         pObj->health = 100;
-                        cpVect randPos = cpv(GetRandomValue(100, (int)width - 100), GetRandomValue(100, (int)height - 100));
+                        float rx = (float)(rand() % ((int)width - 200) + 100);
+                        float ry = (float)(rand() % ((int)height - 200) + 100);
+
+                        cpVect randPos = cpv(rx, ry);
                         cpBodySetPosition(pObj->body, randPos);
                         cpBodySetVelocity(pObj->body, cpvzero);
                     }
@@ -4060,36 +4269,51 @@ target_link_libraries(GameServer PRIVATE GameEngine GameCommon enet::enet_shared
 ﻿#include "../engine/ServerHost.h"
 #include <iostream>
 #include <string>
+#include <thread>
+#include <chrono>
+#include <atomic>
+#include <csignal>
+
+std::atomic<bool> keepRunning{ true };
+
+void SignalHandler(int signum) {
+    std::cout << "\nSignal " << signum << " received. Stopping server...\n";
+    keepRunning = false;
+}
 
 int main() {
+    srand(time(NULL));
     if (enet_initialize() != 0) {
         std::cerr << "An error occurred while initializing ENet.\n";
         return 1;
     }
-//    std::string configPath = "./";
-//
-//#if defined(ANDROID) || defined(PLATFORM_ANDROID)
-//
-//    configPath = GetApplicationDirectory();
-//#endif
-//
-//    ConfigManager::Initialize(configPath);
+
+#ifdef WIN32
     InitWindow(100, 100, "ServerHeadless");
     SetWindowState(FLAG_WINDOW_HIDDEN);
+#else
+    signal(SIGINT, SignalHandler);
+    signal(SIGTERM, SignalHandler);
+#endif
 
     ServerHost server;
     if (server.Start(7777)) {
-        std::cout << "Dedicated Server started on port 7777. Type 'quit' to stop.\n";
+        std::cout << "Dedicated Server started on port 7777.\n";
 
+#ifdef WIN32
+        std::cout << "Type 'quit' to stop.\n";
         std::string cmd;
         while (std::cin >> cmd) {
             if (cmd == "quit") break;
         }
+#else
+        while (keepRunning) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+#endif
 
         server.Stop();
     }
-
-    CloseWindow();
     enet_deinitialize();
     return 0;
 }

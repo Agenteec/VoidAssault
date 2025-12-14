@@ -6,7 +6,6 @@
 #include "chipmunk/chipmunk.h"
 #include "../../common/NetworkPackets.h"
 
-// Определяем типы коллизий для фильтрации (понадобится в будущем)
 enum CollisionType {
     COLLISION_PLAYER = 1,
     COLLISION_BULLET = 2,
@@ -18,10 +17,9 @@ public:
     uint32_t id;
     EntityType type;
 
-    // Ссылки на физические объекты
     cpBody* body = nullptr;
     cpShape* shape = nullptr;
-    cpSpace* spaceRef = nullptr; // Ссылка на мир для очистки
+    cpSpace* spaceRef = nullptr;
 
     bool destroyFlag = false;
     Color color = RED;

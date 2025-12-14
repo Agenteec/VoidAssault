@@ -6,8 +6,8 @@
 struct Particle {
     Vector2 position;
     Vector2 velocity;
-    float life;      // 1.0 -> 0.0
-    float decayRate; // Скорость исчезновения
+    float life;
+    float decayRate;
     float size;
     Color color;
 };

@@ -5,6 +5,7 @@
 #include "../vircontrols/VirtualJoystick.h"
 #include <memory>
 #include "Theme.h"
+
 class GameClient;
 class GameplayScene : public Scene {
     Camera2D camera = { 0 };
@@ -19,6 +20,15 @@ class GameplayScene : public Scene {
     Vector2 predictedPos = { 0, 0 };
     float predictedRot = 0.0f;
     bool isPredictedInit = false;
+
+        float gunAnimOffset = 0.0f; 
+        uint32_t myLevel = 1;
+    float myCurrentXp = 0.0f;
+    float myMaxXp = 100.0f;
+    float myHealth = 100.0f;
+    float myMaxHealth = 100.0f;
+    float myDamage = 0.0f;
+    float mySpeed = 0.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     std::unique_ptr<VirtualJoystick> leftStick;

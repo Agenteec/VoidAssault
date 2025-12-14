@@ -9,11 +9,30 @@ namespace GamePacket {
         INPUT = 1,
         INIT,
         SNAPSHOT,
-        EVENT
-    };
+        EVENT,
+        STATS     };
 }
 
-enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY };
+enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT };
+
+struct PlayerStatsPacket {
+    uint32_t level;
+    float currentXp;
+    float maxXp;
+    float maxHealth;
+    float damage;
+    float speed;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(level);
+        s.value4b(currentXp);
+        s.value4b(maxXp);
+        s.value4b(maxHealth);
+        s.value4b(damage);
+        s.value4b(speed);
+    }
+};
 
 struct PlayerInputPacket {
     Vector2 movement;
@@ -37,7 +56,7 @@ struct EntityState {
     EntityType type;
     float radius;
     Color color;
-
+    uint32_t level; 
     template <typename S>
     void serialize(S& s) {
         s.value4b(id);
@@ -46,13 +65,13 @@ struct EntityState {
         s.value4b(health);
         s.value4b(maxHealth);
 
-        // БЕЗОПАСНАЯ СЕРИАЛИЗАЦИЯ ENUM
         uint8_t typeInt = static_cast<uint8_t>(type);
         s.value1b(typeInt);
         type = static_cast<EntityType>(typeInt);
 
         s.value4b(radius);
         s.object(color);
+        s.value4b(level);
     }
 };
 
