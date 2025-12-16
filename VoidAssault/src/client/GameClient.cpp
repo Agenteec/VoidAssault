@@ -7,23 +7,24 @@ GameClient::GameClient() {
 	ClientConfig& cfg = ConfigManager::GetClient();
 	screenWidth = cfg.resolutionWidth;
 	screenHeight = cfg.resolutionHeight;
+
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
 	InitWindow(0, 0, "Void Assault");
 	screenWidth = GetScreenWidth();
 	screenHeight = GetScreenHeight();
 #else
+	
+	SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 	InitWindow(screenWidth, screenHeight, "Void Assault");
 #endif
+
 	SetTargetFPS(cfg.targetFPS);
-	SetWindowState(FLAG_WINDOW_RESIZABLE);
 	SetWindowMinSize(800, 600);
 
 	netClient = ENetClient::alloc();
 
 	float scale = GetUIScale();
 	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * scale));
-	GuiSetStyle(DEFAULT, TEXT_SPACING, (int)(1 * scale));
-	GuiSetStyle(DEFAULT, BORDER_WIDTH, (int)(2 * scale));
 }
 GameClient::~GameClient() {
 	StopHost();
@@ -59,12 +60,16 @@ void GameClient::StopHost() {
 	}
 }
 float GameClient::GetUIScale() const {
+	// ВАЖНО: Берем текущие размеры окна, а не закешированные
 	int h = GetScreenHeight();
 	float scale = (float)h / 720.0f;
+
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-	scale *= 1.25f;
+	// Для Android делаем интерфейс покрупнее (HUD)
+	scale *= 1.5f;
 #endif
-	if (scale < 1.0f) scale = 1.0f;
+
+	if (scale < 0.8f) scale = 0.8f; // Минимальный скейл
 	return scale;
 }
 void GameClient::Run() {

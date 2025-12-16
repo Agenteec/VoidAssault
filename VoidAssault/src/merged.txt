@@ -157,23 +157,24 @@ GameClient::GameClient() {
 	ClientConfig& cfg = ConfigManager::GetClient();
 	screenWidth = cfg.resolutionWidth;
 	screenHeight = cfg.resolutionHeight;
+
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
 	InitWindow(0, 0, "Void Assault");
 	screenWidth = GetScreenWidth();
 	screenHeight = GetScreenHeight();
 #else
+	
+	SetConfigFlags(FLAG_WINDOW_RESIZABLE);
 	InitWindow(screenWidth, screenHeight, "Void Assault");
 #endif
+
 	SetTargetFPS(cfg.targetFPS);
-	SetWindowState(FLAG_WINDOW_RESIZABLE);
 	SetWindowMinSize(800, 600);
 
 	netClient = ENetClient::alloc();
 
 	float scale = GetUIScale();
 	GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * scale));
-	GuiSetStyle(DEFAULT, TEXT_SPACING, (int)(1 * scale));
-	GuiSetStyle(DEFAULT, BORDER_WIDTH, (int)(2 * scale));
 }
 GameClient::~GameClient() {
 	StopHost();
@@ -209,12 +210,16 @@ void GameClient::StopHost() {
 	}
 }
 float GameClient::GetUIScale() const {
+	// ВАЖНО: Берем текущие размеры окна, а не закешированные
 	int h = GetScreenHeight();
 	float scale = (float)h / 720.0f;
+
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-	scale *= 1.25f;
+	// Для Android делаем интерфейс покрупнее (HUD)
+	scale *= 1.5f;
 #endif
-	if (scale < 1.0f) scale = 1.0f;
+
+	if (scale < 0.8f) scale = 0.8f; // Минимальный скейл
 	return scale;
 }
 void GameClient::Run() {
@@ -281,7 +286,6 @@ public:
 
 	std::shared_ptr<Scene> currentScene;
 	std::shared_ptr<Scene> nextScene;
-
 	GameClient();
 	~GameClient();
 
@@ -510,8 +514,7 @@ public:
     }
 };
 // client\SnapshotManager.h
-﻿// client/SnapshotManager.h
-#pragma once
+﻿#pragma once
 #include "common/NetworkPackets.h"
 #include "raymath.h"
 #include <deque>
@@ -523,7 +526,8 @@ class SnapshotManager {
 public:
     std::deque<WorldSnapshotPacket> history;
 
-    const double INTERPOLATION_DELAY = 0.020;
+
+    const double INTERPOLATION_DELAY = 0.050;
 
     float LerpAngle(float start, float end, float amount) {
         float difference = std::abs(end - start);
@@ -552,6 +556,9 @@ public:
     bool GetInterpolatedState(uint32_t entityId, double clientRenderTime, EntityState& outState) {
         if (history.empty()) return false;
 
+        if (clientRenderTime < history.front().serverTime) {
+            return FindEntityInSnapshot(history.front(), entityId, outState);
+        }
 
         auto it = std::lower_bound(history.begin(), history.end(), clientRenderTime,
             [](const WorldSnapshotPacket& snap, double val) {
@@ -576,19 +583,18 @@ public:
         if (hasA && hasB) {
             double totalDt = snapB.serverTime - snapA.serverTime;
             double currentDt = clientRenderTime - snapA.serverTime;
-            float t = (float)(currentDt / totalDt);
 
+            if (totalDt <= 0.000001) totalDt = 0.000001;
+
+            float t = (float)(currentDt / totalDt);
 
             if (t < 0.0f) t = 0.0f;
             if (t > 1.0f) t = 1.0f;
 
-            if (entB.type == EntityType::BULLET) {
-                outState = entB;
-                outState.position = Vector2Lerp(entA.position, entB.position, t);
-            }
-            else {
-                outState = entB;
-                outState.position = Vector2Lerp(entA.position, entB.position, t);
+            outState = entB;
+            outState.position = Vector2Lerp(entA.position, entB.position, t);
+
+            if (entB.type != EntityType::BULLET) {
                 outState.rotation = LerpAngle(entA.rotation, entB.rotation, t);
             }
             return true;
@@ -619,13 +625,21 @@ private:
 #include "raygui.h"
 
 namespace Theme {
-   
-    static const Color COL_BACKGROUND = { 240, 240, 245, 255 };
+
+    static const Color COL_BACKGROUND = { 240, 240, 240, 255 };
+
+    static const Color COL_GRID = { 205, 205, 205, 255 };
+
     static const Color COL_PANEL = { 255, 255, 255, 245 };
-    static const Color COL_ACCENT = { 0, 120, 200, 255 };
+    static const Color COL_ACCENT = { 0, 178, 225, 255 };
     static const Color COL_ACCENT_DIM = { 200, 200, 210, 255 };
     static const Color COL_TEXT = { 40, 40, 50, 255 };
-    static const Color COL_WARNING = { 200, 50, 50, 255 };
+    static const Color COL_WARNING = { 230, 80, 80, 255 };
+
+    static const Color COLOR_BLUE = { 0, 178, 225, 255 };
+    static const Color COLOR_RED = { 241, 78, 84, 255 };
+    static const Color COLOR_GREEN = { 0, 225, 110, 255 };
+    static const Color COLOR_PURPLE = { 191, 127, 245, 255 };
 
     inline void ApplyTheme() {
         GuiSetStyle(DEFAULT, BACKGROUND_COLOR, 0xF5F5F5FF);
@@ -640,14 +654,22 @@ namespace Theme {
     }
 }
 // client\scenes\GameplayScene.cpp
-﻿// client/scenes/GameplayScene.cpp
-#include "GameplayScene.h"
+﻿#include "GameplayScene.h"
 #include "GameClient.h"
 #include <iostream>
+#include <cstdio>
+#include <algorithm>
+#include <string>
+#include <vector>
 
-#define DEBUG
+// Определяем цвета для редкости или типов артефактов
+static const Color COL_INV_EMPTY = { 0, 0, 0, 100 };
+static const Color COL_INV_BORDER = { 150, 150, 150, 200 };
 
-GameplayScene::GameplayScene(GameClient* g) : Scene(g) {}
+GameplayScene::GameplayScene(GameClient* g) : Scene(g) {
+    // Инициализируем инвентарь пустыми значениями (255 = ArtifactType::EMPTY)
+    myInventory.resize(6, 255);
+}
 
 void GameplayScene::Enter() {
     float w = (float)game->GetWidth();
@@ -655,14 +677,39 @@ void GameplayScene::Enter() {
     camera.zoom = 1.0f;
     camera.offset = { w / 2, h / 2 };
 
+    // --- СБРОС СТАТОВ ПРИ ВХОДЕ ---
+    // Это решает проблему "кривых" статов при рестарте
     myPlayerId = 0;
     isPredictedInit = false;
     predictedPos = { 0, 0 };
+    predictedRot = 0.0f;
+
+    myLevel = 1;
+    myCurrentXp = 0.0f;
+    myMaxXp = 100.0f;
+    myHealth = 100.0f;
+    myMaxHealth = 100.0f;
+    myDamage = 0.0f;
+    mySpeed = 0.0f;
+    myScrap = 0;
+    myKills = 0;
+    currentWave = 1;
+
+    // Очищаем инвентарь локально
+    std::fill(myInventory.begin(), myInventory.end(), 255);
+
+    // Очищаем кэш сущностей для партиклов
+    lastFrameEntityIds.clear();
+
+    gunAnimOffset = 0.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    leftStick = std::make_unique<VirtualJoystick>(Vector2{ 150, h - 150 }, 40.0f, 90.0f);
-    rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - 150, h - 150 }, 40.0f, 90.0f);
-    rightStick->SetColors({ 60, 0, 0, 150 }, { 220, 50, 50, 200 });
+    // Настройка джойстиков для мобилок (выше и ближе к центру)
+    float joyY = h - 180.0f;
+    float joyOffset = 180.0f;
+    leftStick = std::make_unique<VirtualJoystick>(Vector2{ joyOffset, joyY }, 50.0f, 100.0f);
+    rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - joyOffset, joyY }, 50.0f, 100.0f);
+    rightStick->SetColors({ 200, 200, 200, 100 }, { 220, 50, 50, 200 });
 #endif
 }
 
@@ -690,7 +737,7 @@ void GameplayScene::OnMessage(Message::Shared msg) {
         deserializer.object(pkt);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             myPlayerId = pkt.playerId;
-            TraceLog(LOG_INFO, "INIT received. My ID: %d", myPlayerId);
+            TraceLog(LOG_INFO, "INIT received. ID: %d", myPlayerId);
         }
     }
     else if (packetTypeInt == GamePacket::SNAPSHOT) {
@@ -698,9 +745,45 @@ void GameplayScene::OnMessage(Message::Shared msg) {
         deserializer.object(snap);
 
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
+            // Обновляем номер волны
+            currentWave = snap.wave;
+
+            // --- Партиклы (детектор смертей) ---
+            std::vector<uint32_t> currentIds;
+            for (const auto& ent : snap.entities) currentIds.push_back(ent.id);
+
+            if (!lastFrameEntityIds.empty() && !snapshotManager.history.empty()) {
+                const auto& lastSnapEntities = snapshotManager.history.back().entities;
+                for (uint32_t oldId : lastFrameEntityIds) {
+                    bool stillExists = false;
+                    for (uint32_t newId : currentIds) { if (newId == oldId) { stillExists = true; break; } }
+
+                    if (!stillExists && oldId != myPlayerId) {
+                        for (const auto& e : lastSnapEntities) {
+                            if (e.id == oldId) {
+                                Color pCol = (e.type == EntityType::ENEMY) ? Theme::COLOR_RED : Theme::COLOR_BLUE;
+                                if (e.type == EntityType::BULLET) pCol = GRAY;
+
+                                int count = (e.type == EntityType::BULLET) ? 4 : 15;
+                                float size = (e.type == EntityType::BULLET) ? 3.0f : 6.0f;
+                                if (e.type == EntityType::ENEMY && e.subtype == EnemyType::BOSS) {
+                                    count = 60; size = 10.0f;
+                                }
+
+                                particles.SpawnExplosion(e.position, count, pCol);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            lastFrameEntityIds = currentIds;
+            // -----------------------------------
+
             snapshotManager.PushSnapshot(snap);
             lastServerTime = snap.serverTime;
 
+            // Синхронизация своего положения (для коррекции предикта)
             for (const auto& ent : snap.entities) {
                 if (ent.id == myPlayerId) {
                     if (!isPredictedInit) {
@@ -710,35 +793,58 @@ void GameplayScene::OnMessage(Message::Shared msg) {
                     }
                     else {
                         float dist = Vector2Distance(predictedPos, ent.position);
-                        if (dist > 50.0f) {
-                            predictedPos = ent.position;
-                        }
-                        else {
-                            predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
-                        }
+                        if (dist > 150.0f) predictedPos = ent.position; // Телепорт при большом лаге
+                        else predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
                     }
+                    myHealth = ent.health; // HP обновляем сразу из снепшота для плавности
                     break;
                 }
+            }
+        }
+    }
+    else if (packetTypeInt == GamePacket::STATS) {
+        PlayerStatsPacket stats;
+        deserializer.object(stats);
+        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
+            myLevel = stats.level;
+            myCurrentXp = stats.currentXp;
+            myMaxXp = stats.maxXp;
+            // myHealth обновляем из snapshot чаще, но maxHealth отсюда
+            myMaxHealth = stats.maxHealth;
+            myDamage = stats.damage;
+            mySpeed = stats.speed;
+            myScrap = stats.scrap;
+            myKills = stats.kills;
+
+            // Обновляем инвентарь
+            if (stats.inventory.size() == 6) {
+                myInventory = stats.inventory;
             }
         }
     }
 }
 
 void GameplayScene::Update(float dt) {
-    clientTime += dt;
+    if (gunAnimOffset > 0.0f) {
+        gunAnimOffset -= dt * 60.0f;
+        if (gunAnimOffset < 0.0f) gunAnimOffset = 0.0f;
+    }
 
-    if (abs(clientTime - lastServerTime) > 1.0) {
-        clientTime = lastServerTime;
-    }
-    else {
-        clientTime = Lerp((float)clientTime, (float)lastServerTime, 0.05f);
-    }
+    particles.Update(dt);
+
+    // Интерполяция времени
+    clientTime += dt;
+    if (abs(clientTime - lastServerTime) > 2.0) clientTime = lastServerTime;
+    else clientTime = Lerp((float)clientTime, (float)lastServerTime, 0.05f);
 
     PlayerInputPacket pkt = {};
     pkt.movement = { 0, 0 };
     pkt.aimTarget = { 0, 0 };
     pkt.isShooting = false;
-    const float PLAYER_SPEED = 200.0f;
+
+    float currentSpeed = (mySpeed > 0) ? mySpeed : 220.0f;
+    const float MAP_SIZE = 4000.0f; // Размер карты как на сервере
+    float myRadius = 20.0f + (myLevel - 1) * 2.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     if (leftStick && rightStick) {
@@ -746,16 +852,20 @@ void GameplayScene::Update(float dt) {
         rightStick->Update();
         pkt.movement = leftStick->GetAxis();
 
-        if (isPredictedInit) {
-            predictedPos.x += pkt.movement.x * PLAYER_SPEED * dt;
-            predictedPos.y += pkt.movement.y * PLAYER_SPEED * dt;
-        }
-
         Vector2 aimDir = rightStick->GetAxis();
         if (Vector2Length(aimDir) > 0.1f) {
             pkt.isShooting = true;
             pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(aimDir, 300.0f));
             predictedRot = atan2f(aimDir.y, aimDir.x) * RAD2DEG;
+        }
+        else {
+            if (Vector2Length(pkt.movement) > 0.1f) {
+                predictedRot = atan2f(pkt.movement.y, pkt.movement.x) * RAD2DEG;
+                pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(pkt.movement, 300.0f));
+            }
+            else {
+                pkt.aimTarget = Vector2Add(predictedPos, { 300, 0 });
+            }
         }
     }
 #else
@@ -766,11 +876,6 @@ void GameplayScene::Update(float dt) {
 
     if (Vector2Length(pkt.movement) > 1.0f) pkt.movement = Vector2Normalize(pkt.movement);
 
-    if (isPredictedInit) {
-        predictedPos.x += pkt.movement.x * PLAYER_SPEED * dt;
-        predictedPos.y += pkt.movement.y * PLAYER_SPEED * dt;
-    }
-
     pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
     pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
 
@@ -778,18 +883,31 @@ void GameplayScene::Update(float dt) {
     predictedRot = atan2f(diff.y, diff.x) * RAD2DEG;
 #endif
 
+    if (pkt.isShooting && gunAnimOffset <= 1.0f) {
+        gunAnimOffset = 12.0f;
+    }
+
+    if (isPredictedInit) {
+        Vector2 velocity = Vector2Scale(pkt.movement, currentSpeed * dt);
+        Vector2 nextPos = Vector2Add(predictedPos, velocity);
+
+        // Клиентская коллизия со стенами
+        if (nextPos.x < myRadius) nextPos.x = myRadius;
+        if (nextPos.y < myRadius) nextPos.y = myRadius;
+        if (nextPos.x > MAP_SIZE - myRadius) nextPos.x = MAP_SIZE - myRadius;
+        if (nextPos.y > MAP_SIZE - myRadius) nextPos.y = MAP_SIZE - myRadius;
+
+        predictedPos = nextPos;
+    }
+
     if (game->netClient && game->netClient->isConnected()) {
         Buffer buffer;
         OutputAdapter adapter(buffer);
         bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-
-        uint8_t type = GamePacket::INPUT;
-        serializer.value1b(type);
+        serializer.value1b(GamePacket::INPUT);
         serializer.object(pkt);
         serializer.adapter().flush();
-
-        auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
-        game->netClient->send(DeliveryType::UNRELIABLE, stream);
+        game->netClient->send(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 
     if (isPredictedInit) {
@@ -799,34 +917,55 @@ void GameplayScene::Update(float dt) {
 
 void GameplayScene::Draw() {
     BeginMode2D(camera);
-
     ClearBackground(Theme::COL_BACKGROUND);
-    int gridW = 2000; int gridH = 2000;
-    for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(GRAY, 0.2f));
-    for (int i = 0; i <= gridH; i += 50) DrawLine(0, i, gridW, i, Fade(GRAY, 0.2f));
+
+    int gridW = 4000; int gridH = 4000;
+
+    // Сетка
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
+    for (int i = 0; i <= gridW; i += 100) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.4f));
+    for (int i = 0; i <= gridH; i += 100) DrawLine(0, i, gridW, i, Fade(Theme::COL_GRID, 0.4f));
+
+    // Лямбда для рисования танка
+    auto DrawDiepTank = [&](Vector2 pos, float rot, Color mainCol, float radius, float hp, float maxHp, bool isMe) {
+        Color outlineCol = { 85, 85, 85, 255 };
+        float outlineThick = 3.0f;
+
+        Vector2 dir = { cosf(rot * DEG2RAD), sinf(rot * DEG2RAD) };
+        float baseLen = radius * 1.8f;
+        float currentLen = isMe ? (baseLen - gunAnimOffset) : baseLen;
+        float barrelWidth = radius * 0.8f;
+
+        Vector2 bStart = pos;
+        Vector2 bEnd = Vector2Add(pos, Vector2Scale(dir, currentLen));
+        Vector2 perp = { -dir.y, dir.x };
+        Vector2 c1 = Vector2Add(bStart, Vector2Scale(perp, barrelWidth * 0.5f));
+        Vector2 c2 = Vector2Subtract(bStart, Vector2Scale(perp, barrelWidth * 0.5f));
+        Vector2 c3 = Vector2Subtract(bEnd, Vector2Scale(perp, barrelWidth * 0.5f));
+        Vector2 c4 = Vector2Add(bEnd, Vector2Scale(perp, barrelWidth * 0.5f));
+
+        DrawLineEx(c1, c4, outlineThick * 2, outlineCol);
+        DrawLineEx(c2, c3, outlineThick * 2, outlineCol);
+        DrawLineEx(c4, c3, outlineThick * 2, outlineCol);
+        DrawTriangle(c1, c2, c4, LIGHTGRAY);
+        DrawTriangle(c2, c3, c4, LIGHTGRAY);
+
+        if (isMe && gunAnimOffset > 8.0f) {
+            Vector2 flashPos = Vector2Add(bEnd, Vector2Scale(dir, 10.0f));
+            DrawCircleV(flashPos, radius * 0.7f, Fade(WHITE, 0.8f));
+        }
+
+        DrawCircleV(pos, radius + (outlineThick / 2.0f), outlineCol);
+        DrawCircleV(pos, radius, mainCol);
+        };
 
     if (isPredictedInit) {
-        Color myColor = BLUE;
-        DrawCircleV(predictedPos, 20.0f, myColor);
-        Vector2 barrelEnd = {
-            predictedPos.x + cosf(predictedRot * DEG2RAD) * 40,
-            predictedPos.y + sinf(predictedRot * DEG2RAD) * 40
-        };
-        DrawLineEx(predictedPos, barrelEnd, 15, DARKGRAY);
+        float myRadius = 20.0f + (myLevel - 1) * 2.0f;
+        DrawDiepTank(predictedPos, predictedRot, Theme::COL_ACCENT, myRadius, myHealth, myMaxHealth, true);
     }
 
-#ifdef DEBUG
-    if (!snapshotManager.history.empty()) {
-        for (const auto& ent : snapshotManager.history.back().entities) {
-            if (ent.id == myPlayerId) {
-                DrawCircleV(ent.position, 20.0f, Fade(RED, 0.3f));
-                DrawLineV(predictedPos, ent.position, RED);
-                break;
-            }
-        }
-    }
-#endif
+    // Рисуем частицы (под сущностями или над фоном)
+    particles.Draw();
 
     if (!snapshotManager.history.empty()) {
         double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
@@ -837,34 +976,187 @@ void GameplayScene::Draw() {
 
             EntityState renderState;
             if (snapshotManager.GetInterpolatedState(ent.id, renderTime, renderState)) {
-                if (renderState.type == EntityType::PLAYER) {
-                    DrawCircleV(renderState.position, renderState.radius, renderState.color);
-                    Vector2 barrelEnd = {
-                        renderState.position.x + cosf(renderState.rotation * DEG2RAD) * 40,
-                        renderState.position.y + sinf(renderState.rotation * DEG2RAD) * 40
-                    };
-                    DrawLineEx(renderState.position, barrelEnd, 15, DARKGRAY);
 
-                    float hpPct = renderState.health / renderState.maxHealth;
-                    if (renderState.maxHealth > 0) {
-                        DrawRectangle((int)renderState.position.x - 20, (int)renderState.position.y - 40, 40, 5, RED);
-                        DrawRectangle((int)renderState.position.x - 20, (int)renderState.position.y - 40, (int)(40 * hpPct), 5, GREEN);
-                    }
+                if (renderState.type == EntityType::PLAYER) {
+                    float otherRadius = 20.0f + (renderState.level - 1) * 2.0f;
+                    DrawDiepTank(renderState.position, renderState.rotation, Theme::COLOR_RED, otherRadius, renderState.health, renderState.maxHealth, false);
                 }
                 else if (renderState.type == EntityType::BULLET) {
-                    DrawCircleV(renderState.position, renderState.radius, RED);
+                    DrawCircleV(renderState.position, renderState.radius + 1.5f, { 85, 85, 85, 255 });
+                    DrawCircleV(renderState.position, renderState.radius, Theme::COLOR_RED);
+                }
+                else if (renderState.type == EntityType::ENEMY) {
+                    float radius = renderState.radius;
+                    Vector2 pos = renderState.position;
+                    // +90 градусов для корректной ориентации DrawPoly (0 = вверх)
+                    float rot = renderState.rotation + 90.0f;
+
+                    Color enemyColor = Theme::COLOR_RED;
+                    int sides = 3;
+
+                    switch (renderState.subtype) {
+                    case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break; // Розовый
+                    case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break; // Квадрат
+                    case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 5; break; // Пентагон
+                    }
+
+                    DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 });
+                    DrawPoly(pos, sides, radius, rot, enemyColor);
+
+                    // HP Bar Enemy
+                    float hpPct = renderState.health / renderState.maxHealth;
+                    if (hpPct < 0.99f) {
+                        DrawRectangle((int)pos.x - 20, (int)pos.y + (int)radius + 10, 40, 6, { 50,50,50,200 });
+                        DrawRectangle((int)pos.x - 19, (int)pos.y + (int)radius + 11, (int)(38 * hpPct), 4, GREEN);
+                    }
+                }
+                else if (renderState.type == EntityType::ARTIFACT) {
+                    float rot = (float)GetTime() * 100.0f;
+                    DrawPoly(renderState.position, 6, 16.0f, rot, { 85, 85, 85, 255 });
+                    DrawPoly(renderState.position, 6, 13.0f, rot, ORANGE);
                 }
             }
         }
     }
+
     EndMode2D();
 }
 
-void GameplayScene::DrawGUI() {
-    DrawFPS(10, 10);
+// Структура для сортировки
+struct LeaderboardEntry {
+    uint32_t id;
+    uint32_t level;
+    uint32_t kills;
+    bool isMe;
+};
 
-    if (game->netClient && !game->netClient->isConnected()) {
-        DrawText("Connecting to server...", game->GetWidth() / 2 - 100, 20, 20, RED);
+void GameplayScene::DrawGUI() {
+    int w = GetScreenWidth();
+    int h = GetScreenHeight();
+    float uiScale = game->GetUIScale();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale));
+
+    float padding = 20 * uiScale;
+
+    // --- 1. TOP LEFT: STATS ---
+    float tlX = padding;
+    float tlY = padding;
+    char statsText[256];
+    sprintf(statsText, "Scrap: %d\nDmg: %.1f\nSpd: %.0f", myScrap, myDamage, mySpeed);
+    DrawText(statsText, tlX, tlY, 20 * uiScale, GOLD);
+
+    // --- 2. TOP CENTER: WAVE ---
+    char waveText[32];
+    sprintf(waveText, "WAVE %d", currentWave);
+    int waveFontSize = 30 * uiScale;
+    int waveW = MeasureText(waveText, waveFontSize);
+    DrawText(waveText, (w - waveW) / 2, padding, waveFontSize, Theme::COL_ACCENT);
+
+    // --- 3. TOP RIGHT: MENU & LEADERBOARD ---
+    float btnW = 80 * uiScale;
+    float btnH = 30 * uiScale;
+    if (GuiButton(Rectangle{ w - btnW - padding, padding, btnW, btnH }, "MENU")) {
+        game->ReturnToMenu();
+    }
+
+    // Лидерборд
+    if (!snapshotManager.history.empty()) {
+        std::vector<LeaderboardEntry> lb;
+        // Добавляем себя (данные из локальных статов самые свежие)
+        lb.push_back({ myPlayerId, myLevel, myKills, true });
+
+        // Добавляем других
+        const auto& ents = snapshotManager.history.back().entities;
+        for (const auto& e : ents) {
+            if (e.type == EntityType::PLAYER && e.id != myPlayerId) {
+                lb.push_back({ e.id, e.level, e.kills, false });
+            }
+        }
+
+        // Сортируем
+        std::sort(lb.begin(), lb.end(), [](const LeaderboardEntry& a, const LeaderboardEntry& b) {
+            if (a.level != b.level) return a.level > b.level;
+            return a.kills > b.kills;
+            });
+
+        float lbW = 200 * uiScale;
+        float lbX = w - lbW - padding;
+        float lbY = padding + btnH + 10 * uiScale;
+
+        DrawRectangleRounded({ lbX, lbY, lbW, 140 * uiScale }, 0.1f, 4, Fade(BLACK, 0.3f));
+
+        DrawText("LEADERBOARD", lbX + 10 * uiScale, lbY + 5 * uiScale, 16 * uiScale, WHITE);
+        float rowY = lbY + 25 * uiScale;
+
+        for (size_t i = 0; i < lb.size() && i < 5; i++) {
+            std::string s = std::to_string(i + 1) + ". L" + std::to_string(lb[i].level) + " (" + std::to_string(lb[i].kills) + ")";
+            if (lb[i].isMe) s += " YOU";
+            DrawText(s.c_str(), lbX + 10 * uiScale, rowY, 16 * uiScale, lb[i].isMe ? GOLD : LIGHTGRAY);
+            rowY += 18 * uiScale;
+        }
+    }
+
+    // --- 4. BOTTOM CENTER: HUD (BARS & INVENTORY) ---
+    float barW = 500 * uiScale;
+    if (barW > w * 0.6f) barW = w * 0.6f;
+    float barH = 15 * uiScale; // Высота полоски XP
+
+    float centerX = w / 2.0f;
+    float bottomY = h - padding;
+
+    // XP Bar (самый низ)
+    float xpY = bottomY - barH;
+    float xpPct = (myMaxXp > 0) ? (myCurrentXp / myMaxXp) : 0.0f;
+    DrawRectangle(centerX - barW / 2, xpY, barW, barH, Fade(BLACK, 0.6f));
+    DrawRectangle(centerX - barW / 2 + 2, xpY + 2, (int)((barW - 4) * xpPct), barH - 4, { 255, 232, 105, 255 }); // Желтый
+
+    char lvlTxt[32]; sprintf(lvlTxt, "Level %d", myLevel);
+    int lvlW = MeasureText(lvlTxt, 14 * uiScale);
+    DrawText(lvlTxt, centerX - lvlW / 2, xpY + 1, 14 * uiScale, BLACK);
+
+    // HP Bar (над XP)
+    float hpBarH = 22 * uiScale;
+    float hpY = xpY - hpBarH - (5 * uiScale);
+    float hpPct = (myMaxHealth > 0) ? (myHealth / myMaxHealth) : 0.0f;
+    DrawRectangle(centerX - barW / 2, hpY, barW, hpBarH, Fade(BLACK, 0.6f));
+    DrawRectangle(centerX - barW / 2 + 2, hpY + 2, (int)((barW - 4) * hpPct), hpBarH - 4, Theme::COLOR_RED);
+
+    char hpTxt[32]; sprintf(hpTxt, "%.0f / %.0f", myHealth, myMaxHealth);
+    int hpTxtW = MeasureText(hpTxt, 16 * uiScale);
+    DrawText(hpTxt, centerX - hpTxtW / 2, hpY + 3 * uiScale, 16 * uiScale, WHITE);
+
+    // Инвентарь (над HP)
+    // Рисуем 6 ячеек
+    float slotSize = 40 * uiScale;
+    float slotGap = 5 * uiScale;
+    float invTotalW = (slotSize * 6) + (slotGap * 5);
+    float invStartX = centerX - invTotalW / 2;
+    float invY = hpY - slotSize - (15 * uiScale);
+
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+    // На мобилке поднимаем выше, чтобы не перекрывалось пальцами на джойстиках
+    invY -= 80 * uiScale;
+#endif
+
+    for (int i = 0; i < 6; i++) {
+        Rectangle slotRect = { invStartX + i * (slotSize + slotGap), invY, slotSize, slotSize };
+        DrawRectangleRec(slotRect, COL_INV_EMPTY);
+        DrawRectangleLinesEx(slotRect, 2, COL_INV_BORDER);
+
+        if (i < myInventory.size() && myInventory[i] != 255) {
+            // Отрисовка иконки артефакта
+            Color iconColor = WHITE;
+            const char* label = "?";
+            switch (myInventory[i]) {
+            case 0: iconColor = { 255, 100, 100, 255 }; label = "D"; break; // Damage
+            case 1: iconColor = { 100, 100, 255, 255 }; label = "S"; break; // Speed
+            case 2: iconColor = { 100, 255, 100, 255 }; label = "H"; break; // Health
+            case 3: iconColor = { 255, 255, 100, 255 }; label = "R"; break; // Reload
+            }
+            // Мини-иконка
+            DrawRectangle(slotRect.x + 4, slotRect.y + 4, slotRect.width - 8, slotRect.height - 8, iconColor);
+            DrawText(label, slotRect.x + 10 * uiScale, slotRect.y + 5 * uiScale, 24 * uiScale, BLACK);
+        }
     }
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
@@ -872,13 +1164,12 @@ void GameplayScene::DrawGUI() {
     if (rightStick) rightStick->Draw();
 #endif
 
-#ifdef DEBUG
-    DrawText("DEBUG MODE", 10, 40, 20, RED);
-    DrawText(TextFormat("Ping (fake): %.2f ms", snapshotManager.INTERPOLATION_DELAY * 1000), 10, 60, 20, GREEN);
-#endif
-
-    if (GuiButton(Rectangle{ (float)game->GetWidth() - 100, 10, 90, 30 }, "DISCONNECT")) {
-        game->ReturnToMenu();
+    if (game->netClient && !game->netClient->isConnected()) {
+        const char* txt = "Connection lost...";
+        DrawText(txt, w / 2 - MeasureText(txt, 30 * uiScale) / 2, h / 2, 30 * uiScale, Theme::COL_WARNING);
+    }
+    else {
+        DrawFPS(10, 10);
     }
 }
 // client\scenes\GameplayScene.h
@@ -887,13 +1178,17 @@ void GameplayScene::DrawGUI() {
 #include "../../common/NetworkPackets.h"
 #include "SnapshotManager.h"
 #include "../vircontrols/VirtualJoystick.h"
+#include "../ParticleSystem.h" // Подключаем партиклы
 #include <memory>
+#include <vector>
 #include "Theme.h"
+
 class GameClient;
 class GameplayScene : public Scene {
     Camera2D camera = { 0 };
 
     SnapshotManager snapshotManager;
+    ParticleSystem particles; // Система частиц
 
     double clientTime = 0.0;
     double lastServerTime = 0.0;
@@ -903,6 +1198,23 @@ class GameplayScene : public Scene {
     Vector2 predictedPos = { 0, 0 };
     float predictedRot = 0.0f;
     bool isPredictedInit = false;
+
+    float gunAnimOffset = 0.0f;
+    uint32_t myLevel = 1;
+    float myCurrentXp = 0.0f;
+    float myMaxXp = 100.0f;
+    float myHealth = 100.0f;
+    float myMaxHealth = 100.0f;
+    float myDamage = 0.0f;
+    float mySpeed = 0.0f;
+
+    uint32_t myScrap = 0;
+    uint32_t myKills = 0;
+    uint32_t currentWave = 1;
+    std::vector<uint8_t> myInventory{255,255,255,255,255,255};
+
+    // Для определения исчезновения врагов (смерти)
+    std::vector<uint32_t> lastFrameEntityIds;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     std::unique_ptr<VirtualJoystick> leftStick;
@@ -1014,8 +1326,7 @@ void MainMenuScene::DrawGUI() {
         float panelY = (h - panelH) / 2.0f + (h * 0.05f);
 
         Rectangle menuRect = { cx - panelW / 2, panelY, panelW, panelH };
-        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.0.3", font);
-
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.4(15.12.2025)", font);
         float currentY = panelY + panelPadding;
 
         if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
@@ -1809,11 +2120,48 @@ namespace GamePacket {
         INPUT = 1,
         INIT,
         SNAPSHOT,
-        EVENT
+        EVENT,
+        STATS
     };
 }
 
-enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY };
+enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT };
+
+namespace EnemyType {
+    enum : uint8_t { BASIC = 0, FAST, TANK, BOSS };
+}
+
+// Типы артефактов
+namespace ArtifactType {
+    enum : uint8_t { DAMAGE = 0, SPEED, HEALTH, RELOAD, EMPTY = 255 };
+}
+
+struct PlayerStatsPacket {
+    uint32_t level;
+    float currentXp;
+    float maxXp;
+    float maxHealth;
+    float damage;
+    float speed;
+    uint32_t scrap;
+    uint32_t kills;
+
+    // Инвентарь: 6 слотов, храним ID типа артефакта
+    std::vector<uint8_t> inventory;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(level);
+        s.value4b(currentXp);
+        s.value4b(maxXp);
+        s.value4b(maxHealth);
+        s.value4b(damage);
+        s.value4b(speed);
+        s.value4b(scrap);
+        s.value4b(kills);
+        s.container1b(inventory, 6); // Сериализуем вектор как байты
+    }
+};
 
 struct PlayerInputPacket {
     Vector2 movement;
@@ -1835,8 +2183,11 @@ struct EntityState {
     float health;
     float maxHealth;
     EntityType type;
+    uint8_t subtype;
     float radius;
     Color color;
+    uint32_t level;
+    uint32_t kills;
 
     template <typename S>
     void serialize(S& s) {
@@ -1845,24 +2196,26 @@ struct EntityState {
         s.value4b(rotation);
         s.value4b(health);
         s.value4b(maxHealth);
-
-        // БЕЗОПАСНАЯ СЕРИАЛИЗАЦИЯ ENUM
         uint8_t typeInt = static_cast<uint8_t>(type);
         s.value1b(typeInt);
         type = static_cast<EntityType>(typeInt);
-
+        s.value1b(subtype);
         s.value4b(radius);
         s.object(color);
+        s.value4b(level);
+        s.value4b(kills);
     }
 };
 
 struct WorldSnapshotPacket {
     double serverTime;
+    uint32_t wave; // Текущая волна
     std::vector<EntityState> entities;
 
     template <typename S>
     void serialize(S& s) {
         s.value8b(serverTime);
+        s.value4b(wave);
         s.container(entities, 10000);
     }
 };
@@ -3428,7 +3781,7 @@ std::string format(std::time_t);
     ServerHost.h
  "ServerHost.h"
  ServerHost.cpp
- "Utils/ConfigManager.h" "ECS/PhysicsUtils.h")
+ "Utils/ConfigManager.h" "ECS/PhysicsUtils.h" "ECS/Enemy.h" "ECS/Artifact.h")
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${BITSTERY_EXTERNAL_INCLUDE_DIR})
@@ -3468,7 +3821,6 @@ inline Vector2 ToRay(cpVect v) {
 #include <iostream>
 #include <chrono>
 #include <cmath>
-#include <iomanip>
 
 #if defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
@@ -3496,10 +3848,7 @@ bool ServerHost::Start(int port) {
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    if (!netServer->start(port)) {
-        std::cerr << "SERVER: Failed to start on port " << port << std::endl;
-        return false;
-    }
+    if (!netServer->start(port)) return false;
 
     std::cout << "SERVER: Started on port " << port << std::endl;
     running = true;
@@ -3509,9 +3858,7 @@ bool ServerHost::Start(int port) {
 
 void ServerHost::Stop() {
     running = false;
-    if (serverThread.joinable()) {
-        serverThread.join();
-    }
+    if (serverThread.joinable()) serverThread.join();
     netServer->stop();
 }
 
@@ -3520,93 +3867,127 @@ void ServerHost::ServerLoop() {
     auto lastTime = clock::now();
     double accumulator = 0.0;
     const double dt = 1.0 / 60.0;
+
     double snapshotTimer = 0.0;
+    double statsTimer = 0.0;
 
-    double debugLogTimer = 0.0;
-
-    std::cout << "SERVER: Loop started. Tick rate: " << dt << std::endl;
+    // Сброс волн при старте
+    waveCount = 1;
+    waveTimer = 0.0;
+    timeToNextWave = 5.0; // Первая волна через 5 секунд
 
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
-        std::chrono::duration<double> frameTimeWrapper = currentTime - lastTime;
-        double frameTime = frameTimeWrapper.count();
+        double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        if (std::isnan(frameTime) || frameTime < 0.0) {
-            frameTime = 0.001;
-            std::cerr << "WARNING: NaN frame time detected!" << std::endl;
-        }
+        if (frameTime > 0.25) frameTime = 0.25;
 
-        if (frameTime > 0.25) {
-            // std::cerr << "WARNING: Lag spike detected: " << frameTime << "s" << std::endl;
-            frameTime = 0.25;
+        // --- ЛОГИКА "СНА" СЕРВЕРА ---
+        if (netServer->numClients() == 0) {
+            // Если сервер опустел, но на нем есть активность (волны > 1 или мобы) - сбрасываем
+            bool hasEntities = false;
+            for (auto& pair : gameScene.objects) {
+                if (pair.second->type != EntityType::PLAYER) { hasEntities = true; break; }
+            }
+
+            if (waveCount > 1 || hasEntities) {
+                std::cout << "SERVER: Empty. Resetting game world..." << std::endl;
+                // Удаляем всех кроме игроков (игроков там и так нет, но для безопасности)
+                auto it = gameScene.objects.begin();
+                while (it != gameScene.objects.end()) {
+                    if (it->second->type == EntityType::ENEMY ||
+                        it->second->type == EntityType::BULLET ||
+                        it->second->type == EntityType::ARTIFACT) {
+                        it = gameScene.objects.erase(it);
+                    }
+                    else {
+                        ++it;
+                    }
+                }
+                waveCount = 1;
+                waveTimer = 0;
+                timeToNextWave = 5.0;
+            }
+
+            // Небольшая задержка, чтобы не грузить ЦП в холостую
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            // Продолжаем поллинг сети, чтобы принять новых игроков, но не обновляем физику
+            auto msgs = netServer->poll();
+            for (auto& msg : msgs) {
+                if (msg->type() == MessageType::CONNECT) {
+                    // Обработка первого подключения (копия кода ниже)
+                    uint32_t peerId = msg->peerId();
+                    std::cout << "Client " << peerId << " connected (waking up).\n";
+                    auto player = gameScene.CreatePlayerWithId(peerId);
+                    InitPacket initPkt; initPkt.playerId = player->id;
+                    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                    ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+                    netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                }
+            }
+            continue;
         }
+        // -----------------------------
 
         accumulator += frameTime;
         snapshotTimer += frameTime;
-        debugLogTimer += frameTime;
+        statsTimer += frameTime;
 
-        if (debugLogTimer > 5.0) {
-            std::cout << "SERVER ALIVE: Time: " << GetSystemTime()
-                << " Clients: " << netServer->numClients()
-                << " Objects: " << gameScene.objects.size() << std::endl;
-            debugLogTimer = 0.0;
+        // --- ЛОГИКА ВОЛН ---
+        waveTimer += frameTime;
+        if (waveTimer >= timeToNextWave) {
+            waveTimer = 0.0;
+            timeToNextWave = 15.0; // Интервал между волнами
+
+            // Ограничение врагов
+            int currentEnemies = 0;
+            for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
+
+            if (currentEnemies < 80) { // Лимит 80 врагов
+                int enemiesToSpawn = 3 + waveCount;
+                if (enemiesToSpawn > 25) enemiesToSpawn = 25;
+
+                std::cout << "SERVER: Spawning Wave " << waveCount << std::endl;
+                for (int i = 0; i < enemiesToSpawn; i++) {
+                    gameScene.SpawnEnemy();
+                }
+                waveCount++;
+            }
         }
 
-
         auto msgs = netServer->poll();
-
         for (auto& msg : msgs) {
             uint32_t peerId = msg->peerId();
 
             if (msg->type() == MessageType::CONNECT) {
-                std::cout << "SERVER: Client " << peerId << " connected.\n";
-
+                std::cout << "Client " << peerId << " connected.\n";
                 auto player = gameScene.CreatePlayerWithId(peerId);
 
-                InitPacket initPkt;
-                initPkt.playerId = player->id;
-
-                Buffer buffer;
-                OutputAdapter adapter(buffer);
-                bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-
-                serializer.value1b(GamePacket::INIT);
-                serializer.object(initPkt);
-                serializer.adapter().flush();
-
-                auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
-                netServer->send(peerId, DeliveryType::RELIABLE, stream);
+                InitPacket initPkt; initPkt.playerId = player->id;
+                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+                netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
             }
             else if (msg->type() == MessageType::DISCONNECT) {
-                std::cout << "SERVER: Client " << peerId << " disconnected.\n";
                 gameScene.objects.erase(peerId);
             }
             else if (msg->type() == MessageType::DATA) {
-                const auto& buffer = msg->stream()->buffer();
+                const auto& buf = msg->stream()->buffer();
                 size_t offset = msg->stream()->tellg();
-
-                if (buffer.empty() || offset >= buffer.size()) continue;
-
-                InputAdapter adapter(buffer.begin() + offset, buffer.end());
-                bitsery::Deserializer<InputAdapter> des(std::move(adapter));
-
-                uint8_t packetType;
-                des.value1b(packetType);
-
-                if (packetType == GamePacket::INPUT) {
-                    PlayerInputPacket input = {};
-                    des.object(input);
-
-                    if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                        if (gameScene.objects.count(peerId)) {
-                            auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                            if (p) {
-                              
-                                if (std::isfinite(input.movement.x) && std::isfinite(input.movement.y)) {
-                                    p->ApplyInput(input.movement);
-                                    p->aimTarget = input.aimTarget;
-                                    p->wantsToShoot = input.isShooting;
+                if (!buf.empty() && offset < buf.size()) {
+                    InputAdapter ia(buf.begin() + offset, buf.end());
+                    bitsery::Deserializer<InputAdapter> des(std::move(ia));
+                    uint8_t type; des.value1b(type);
+                    if (type == GamePacket::INPUT) {
+                        PlayerInputPacket inp; des.object(inp);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            if (gameScene.objects.count(peerId)) {
+                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                                if (p) {
+                                    p->ApplyInput(inp.movement);
+                                    p->aimTarget = inp.aimTarget;
+                                    p->wantsToShoot = inp.isShooting;
                                 }
                             }
                         }
@@ -3615,23 +3996,44 @@ void ServerHost::ServerLoop() {
             }
         }
 
-
-        int physicsSteps = 0;
         while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
-            physicsSteps++;
-
-           
-            if (physicsSteps > 5) {
-                accumulator = 0;
-                break;
-            }
         }
 
-        if (snapshotTimer >= 0.05) {
+        // --- SNAPSHOTS (30 Hz) ---
+        if (snapshotTimer >= 0.033) {
             BroadcastSnapshot();
             snapshotTimer = 0;
+        }
+
+        // --- PRIVATE STATS (5 Hz) ---
+        if (statsTimer >= 0.2) {
+            for (auto& [id, obj] : gameScene.objects) {
+                if (obj->type == EntityType::PLAYER) {
+                    auto p = std::dynamic_pointer_cast<Player>(obj);
+
+                    PlayerStatsPacket stats;
+                    stats.level = p->level;
+                    stats.currentXp = p->currentXp;
+                    stats.maxXp = p->maxXp;
+                    stats.maxHealth = p->maxHealth;
+                    stats.damage = p->curDamage;
+                    stats.speed = p->curSpeed;
+                    stats.scrap = p->scrap;
+                    stats.kills = p->kills;
+                    // Сериализуем инвентарь (вектор)
+                    stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
+
+                    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                    ser.value1b(GamePacket::STATS);
+                    ser.object(stats);
+                    ser.adapter().flush();
+
+                    netServer->send(id, DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                }
+            }
+            statsTimer = 0;
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -3643,6 +4045,7 @@ void ServerHost::BroadcastSnapshot() {
 
     WorldSnapshotPacket snap;
     snap.serverTime = GetSystemTime();
+    snap.wave = waveCount; // Отправляем текущую волну всем
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
@@ -3650,15 +4053,8 @@ void ServerHost::BroadcastSnapshot() {
 
         if (obj->body) {
             cpVect pos = cpBodyGetPosition(obj->body);
-            if (!std::isfinite(pos.x) || !std::isfinite(pos.y)) {
-                pos = cpv(0, 0);
-                cpBodySetPosition(obj->body, pos);
-                cpBodySetVelocity(obj->body, cpv(0, 0));
-                std::cerr << "WARN: Resetting body " << id << " due to NaN position" << std::endl;
-            }
-
             state.position = ToRay(pos);
-            state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
+            state.rotation = obj->rotation;
         }
         else {
             state.position = { 0,0 }; state.rotation = 0;
@@ -3667,23 +4063,34 @@ void ServerHost::BroadcastSnapshot() {
         state.health = obj->health;
         state.maxHealth = obj->maxHealth;
         state.type = obj->type;
-        state.radius = (obj->type == EntityType::BULLET) ? 5.0f : 20.0f;
         state.color = obj->color;
+        state.level = 1;
+        state.radius = 20.0f;
+        state.kills = 0;
+
+        if (obj->type == EntityType::PLAYER) {
+            auto p = std::dynamic_pointer_cast<Player>(obj);
+            if (p) {
+                state.level = p->level;
+                state.kills = p->kills;
+            }
+        }
+        else if (obj->type == EntityType::BULLET) {
+            state.radius = 5.0f;
+        }
+        else if (obj->type == EntityType::ENEMY) {
+            auto e = std::dynamic_pointer_cast<Enemy>(obj);
+            if (e) state.subtype = e->enemyType; // Тип врага для отрисовки
+        }
 
         snap.entities.push_back(state);
     }
 
-    Buffer buffer;
-    OutputAdapter adapter(buffer);
-    bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-
-    uint8_t type = GamePacket::SNAPSHOT;
-    serializer.value1b(type);
-    serializer.object(snap);
-    serializer.adapter().flush();
-
-    auto stream = StreamBuffer::alloc(buffer.data(), buffer.size());
-    netServer->broadcast(DeliveryType::UNRELIABLE, stream);
+    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+    ser.value1b(GamePacket::SNAPSHOT);
+    ser.object(snap);
+    ser.adapter().flush();
+    netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
 }
 // engine\ServerHost.h
 ﻿#pragma once
@@ -3703,6 +4110,11 @@ class ServerHost {
     std::atomic<bool> running{ false };
     std::thread serverThread;
 
+    // Переменные для волн врагов
+    double waveTimer = 0.0;
+    double timeToNextWave = 5.0; // Первая волна через 5 секунд
+    int waveCount = 1;
+
 public:
     ServerHost();
     ~ServerHost();
@@ -3713,6 +4125,8 @@ public:
     void ServerLoop();
     void BroadcastSnapshot();
 };
+// engine\ECS\Artifact.h
+
 // engine\ECS\Bullet.h
 ﻿#pragma once
 #include "GameObject.h"
@@ -3760,11 +4174,81 @@ public:
         if (lifeTime <= 0) destroyFlag = true;
     }
 };
+// engine\ECS\Enemy.h
+﻿#pragma once
+#include "GameObject.h"
+#include "../PhysicsUtils.h"
+#include "raymath.h"
+#include "../../common/NetworkPackets.h"
+
+class Enemy : public GameObject {
+public:
+    float speed = 100.0f;
+    float damage = 10.0f;
+    float xpReward = 20.0f;
+    int scrapReward = 1;
+    uint8_t enemyType = EnemyType::BASIC;
+
+    Enemy(uint32_t id, Vector2 pos, uint8_t type, cpSpace* space) : GameObject(id, EntityType::ENEMY) {
+        spaceRef = space;
+        enemyType = type;
+        cpFloat radius = 20.0;
+        cpFloat mass = 5.0;
+
+        switch (type) {
+        case EnemyType::BASIC:
+            speed = 100.0f; maxHealth = 30.0f; damage = 10.0f; xpReward = 20.0f; scrapReward = 1; radius = 20.0f; break;
+        case EnemyType::FAST:
+            speed = 180.0f; maxHealth = 15.0f; damage = 15.0f; xpReward = 30.0f; scrapReward = 2; radius = 15.0f; mass = 2.0f; break;
+        case EnemyType::TANK:
+            speed = 60.0f; maxHealth = 100.0f; damage = 20.0f; xpReward = 60.0f; scrapReward = 5; radius = 30.0f; mass = 20.0f; break;
+        case EnemyType::BOSS:
+            speed = 40.0f; maxHealth = 1000.0f; damage = 40.0f; xpReward = 500.0f; scrapReward = 50; radius = 60.0f; mass = 200.0f; break;
+        }
+
+        health = maxHealth;
+
+        cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
+        body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
+        cpBodySetPosition(body, ToCp(pos));
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
+        cpShapeSetElasticity(shape, 0.2);
+        cpShapeSetFriction(shape, 0.9);
+        cpShapeSetCollisionType(shape, COLLISION_PLAYER); // Игрок и враг имеют один тип коллизии, чтобы толкаться
+        cpShapeSetUserData(shape, (void*)this);
+    }
+
+    void Update(float dt) override {
+        // Регенерация (медленная)
+        if (health < maxHealth) {
+            health += maxHealth * 0.005f * dt; // 0.5% в сек
+        }
+
+        cpVect vel = cpBodyGetVelocity(body);
+        float currentSpeed = cpvlength(vel);
+        if (currentSpeed > speed) {
+            cpBodySetVelocity(body, cpvmult(cpvnormalize(vel), speed));
+        }
+    }
+
+    void MoveTowards(Vector2 targetPos) {
+        if (!body) return;
+        Vector2 pos = ToRay(cpBodyGetPosition(body));
+        Vector2 dir = Vector2Subtract(targetPos, pos);
+        float angle = atan2(dir.y, dir.x);
+        cpBodySetAngle(body, angle);
+        rotation = angle * RAD2DEG;
+        if (Vector2Length(dir) < 5.0f) { cpBodySetVelocity(body, cpvzero); return; }
+
+        Vector2 moveDir = Vector2Normalize(dir);
+        cpVect newVel = cpv(moveDir.x * speed, moveDir.y * speed);
+        cpVect currentVel = cpBodyGetVelocity(body);
+        cpBodySetVelocity(body, cpvlerp(currentVel, newVel, 0.15f));
+    }
+};
 // engine\ECS\GameObject.h
 ﻿#pragma once
-#if defined(_WIN32)
 #include "fix_win32_compatibility.h"
-#endif
 #include "raylib.h"
 #include "chipmunk/chipmunk.h"
 #include "../../common/NetworkPackets.h"
@@ -3790,22 +4274,23 @@ public:
     float health = 100.0f;
     float maxHealth = 100.0f;
 
+    double lastDamageTime = 0.0;
+
     GameObject(uint32_t _id, EntityType _type) : id(_id), type(_type) {}
 
     virtual ~GameObject() {
         if (spaceRef) {
-            if (shape) {
-                cpSpaceRemoveShape(spaceRef, shape);
-                cpShapeFree(shape);
-            }
-            if (body) {
-                cpSpaceRemoveBody(spaceRef, body);
-                cpBodyFree(body);
-            }
+            if (shape) { cpSpaceRemoveShape(spaceRef, shape); cpShapeFree(shape); }
+            if (body) { cpSpaceRemoveBody(spaceRef, body); cpBodyFree(body); }
         }
     }
 
     virtual void Update(float dt) = 0;
+
+    void TakeDamage(float amount, double currentTime) {
+        health -= amount;
+        lastDamageTime = currentTime;
+    }
 };
 // engine\ECS\PhysicsUtils.h
 ﻿#pragma once
@@ -3835,83 +4320,169 @@ inline Vector2 ToRay(cpVect v) {
 #include "GameObject.h"
 #include "../PhysicsUtils.h"
 #include "raymath.h"
+#include <vector>
+
+struct ArtifactStats {
+    float damageMult = 0.0f;
+    float speedMult = 0.0f;
+    float healthFlat = 0.0f;
+    float reloadMult = 0.0f;
+};
 
 class Player : public GameObject {
 public:
-    float speed = 200.0f;
-    float shootCooldown = 0.0f;
-    const float FIRE_RATE = 0.2f;
+    const float BASE_SPEED = 220.0f;
+    const float BASE_RELOAD = 0.5f;
+    const float BASE_DAMAGE = 15.0f;
+    const float BASE_HP = 100.0f;
 
+    uint32_t level = 1;
+    float currentXp = 0.0f;
+    float maxXp = 100.0f;
+    uint32_t scrap = 0;
+    uint32_t kills = 0;
+
+    // Инвентарь: 6 слотов. 255 = пусто
+    uint8_t inventory[6];
+
+    ArtifactStats artifacts;
+
+    float shootCooldown = 0.0f;
     bool wantsToShoot = false;
     Vector2 aimTarget = { 0,0 };
     bool spawnBulletSignal = false;
     Vector2 bulletDir = { 0,0 };
+    Vector2 currentVelocity = { 0,0 };
+    Vector2 knockback = { 0, 0 };
+
+    float curSpeed = 0;
+    float curReload = 0;
+    float curDamage = 0;
 
     Player(uint32_t id, Vector2 startPos, cpSpace* space) : GameObject(id, EntityType::PLAYER) {
         spaceRef = space;
-        color = BLUE;
+        color = { 0, 120, 215, 255 };
+
+        // Обнуляем инвентарь
+        for (int i = 0; i < 6; ++i) inventory[i] = ArtifactType::EMPTY;
 
         cpFloat radius = 20.0;
-        cpFloat mass = 10.0;
+        cpFloat mass = 5.0;
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
 
         body = cpSpaceAddBody(space, cpBodyNew(mass, moment));
         cpBodySetPosition(body, ToCp(startPos));
-
         cpBodySetMoment(body, INFINITY);
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
-        cpShapeSetFriction(shape, 0.7);
-        cpShapeSetElasticity(shape, 0.1);
-        cpShapeSetCollisionType(shape, COLLISION_PLAYER);
 
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
+        cpShapeSetFriction(shape, 0.0f);
+        cpShapeSetElasticity(shape, 0.0f);
+        cpShapeSetCollisionType(shape, COLLISION_PLAYER);
         cpShapeSetUserData(shape, (void*)this);
+
+        RecalculateStats();
+        health = maxHealth;
+    }
+
+    void Reset() {
+        level = 1;
+        currentXp = 0;
+        maxXp = 100.0f;
+        scrap = 0;
+        kills = 0;
+        health = maxHealth;
+        for (int i = 0; i < 6; ++i) inventory[i] = ArtifactType::EMPTY;
+        RecalculateStats();
+    }
+
+    void RecalculateStats() {
+        // Сброс бонусов
+        artifacts = { 0,0,0,0 };
+
+        // Пересчет бонусов от инвентаря
+        for (int i = 0; i < 6; i++) {
+            if (inventory[i] == ArtifactType::EMPTY) continue;
+            switch (inventory[i]) {
+            case ArtifactType::DAMAGE: artifacts.damageMult += 0.15f; break;
+            case ArtifactType::SPEED: artifacts.speedMult += 0.10f; break;
+            case ArtifactType::HEALTH: artifacts.healthFlat += 50.0f; break;
+            case ArtifactType::RELOAD: artifacts.reloadMult += 0.10f; break;
+            }
+        }
+
+        float lvlScale = (float)(level - 1);
+        maxHealth = (BASE_HP + artifacts.healthFlat) * (1.0f + (lvlScale * 0.1f));
+        curDamage = BASE_DAMAGE * (1.0f + (lvlScale * 0.1f) + artifacts.damageMult);
+        curSpeed = BASE_SPEED * (1.0f + (lvlScale * 0.02f) + artifacts.speedMult);
+        curReload = BASE_RELOAD * (1.0f - (lvlScale * 0.03f) - artifacts.reloadMult);
+        if (curReload < 0.1f) curReload = 0.1f;
+
+        if (health > maxHealth) health = maxHealth;
+    }
+
+    bool AddItemToInventory(uint8_t type) {
+        for (int i = 0; i < 6; i++) {
+            if (inventory[i] == ArtifactType::EMPTY) {
+                inventory[i] = type;
+                RecalculateStats();
+                return true;
+            }
+        }
+        return false; // Инвентарь полон
+    }
+
+    void AddXp(float amount) {
+        currentXp += amount;
+        while (currentXp >= maxXp) {
+            currentXp -= maxXp;
+            level++;
+            maxXp *= 1.2f;
+            RecalculateStats();
+            health = maxHealth; // Лечим при уровне
+        }
     }
 
     void Update(float dt) override {
-        if (shootCooldown > 0) shootCooldown -= dt;
+        // --- РЕГЕНЕРАЦИЯ ---
+        double currentTime = GetTime();
+        float regenAmount = maxHealth * 0.01f * dt; // 1% в сек база
+        if (currentTime - lastDamageTime > 5.0) {
+            regenAmount *= 5.0f; // 5% в сек, если не получали урон 5 сек
+        }
+        health += regenAmount;
+        if (health > maxHealth) health = maxHealth;
+        // -------------------
 
-        
+        if (shootCooldown > 0) shootCooldown -= dt;
+        knockback = Vector2Lerp(knockback, { 0,0 }, dt * 5.0f);
+
         Vector2 pos = ToRay(cpBodyGetPosition(body));
+        cpVect cv = cpBodyGetVelocity(body);
+        currentVelocity = { (float)cv.x, (float)cv.y };
 
         if (wantsToShoot && shootCooldown <= 0) {
-            shootCooldown = FIRE_RATE;
+            shootCooldown = curReload;
             spawnBulletSignal = true;
             bulletDir = Vector2Subtract(aimTarget, pos);
+            Vector2 recoilDir = Vector2Normalize(bulletDir);
+            knockback = Vector2Subtract(knockback, Vector2Scale(recoilDir, 150.0f));
         }
 
         Vector2 diff = Vector2Subtract(aimTarget, pos);
         rotation = atan2(diff.y, diff.x) * RAD2DEG;
-
         cpBodySetAngle(body, atan2(diff.y, diff.x));
-
-        cpVect vel = cpBodyGetVelocity(body);
-        cpBodySetVelocity(body, cpvmult(vel, 0.90f));
     }
 
     void ApplyInput(Vector2 move) {
         if (!body) return;
+        if (!std::isfinite(move.x) || !std::isfinite(move.y)) move = { 0, 0 };
+        float len = Vector2Length(move);
+        if (len > 1.0f) move = Vector2Normalize(move);
+        if (len < 0.1f) move = { 0, 0 };
 
-
-        if (!std::isfinite(move.x) || !std::isfinite(move.y)) {
-            move = { 0, 0 };
-        }
-
-
-        float length = Vector2Length(move);
-        if (length > 1.0f) {
-            move = Vector2Normalize(move);
-
-            if (!std::isfinite(move.x)) move = { 0, 0 };
-        }
-
-        float targetX = move.x * speed;
-        float targetY = move.y * speed;
-
-        if (!std::isfinite(targetX)) targetX = 0;
-        if (!std::isfinite(targetY)) targetY = 0;
-
-        cpBodySetVelocity(body, cpv(targetX, targetY));
-
+        Vector2 targetVel = Vector2Scale(move, curSpeed);
+        Vector2 finalVel = Vector2Add(targetVel, knockback);
+        cpBodySetVelocity(body, cpv(finalVel.x, finalVel.y));
         cpBodySetAngularVelocity(body, 0.0f);
     }
 };
@@ -3923,62 +4494,94 @@ public:
 #include <algorithm>
 #include "ECS/Player.h"
 #include "ECS/Bullet.h"
+#include "ECS/Enemy.h"
 #include "PhysicsUtils.h"
+
+// Класс артефакта
+class Artifact : public GameObject {
+public:
+    uint8_t bonusType = 0;
+    Artifact(uint32_t id, Vector2 pos, cpSpace* space) : GameObject(id, EntityType::ARTIFACT) {
+        spaceRef = space;
+        bonusType = rand() % 4; // Случайный тип
+        cpFloat radius = 15.0f;
+        body = cpSpaceAddBody(space, cpBodyNew(1.0f, cpMomentForCircle(1.0f, 0, radius, cpvzero)));
+        cpBodySetPosition(body, ToCp(pos));
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
+        cpShapeSetSensor(shape, true);
+        cpShapeSetUserData(shape, (void*)this);
+    }
+    void Update(float dt) override {}
+};
 
 class GameScene {
 public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
     uint32_t nextId = 1000;
-    float width = 2000;
-    float height = 2000;
+    float width = 4000;
+    float height = 4000;
 
     GameScene() {
         space = cpSpaceNew();
         cpSpaceSetGravity(space, cpv(0, 0));
+        cpSpaceSetIdleSpeedThreshold(space, 0);
         CreateMapBoundaries();
     }
 
-    ~GameScene() {
-        objects.clear();
-        cpSpaceFree(space);
-    }
+    ~GameScene() { objects.clear(); cpSpaceFree(space); }
 
-    void CreateMapBoundaries() {
+    void CreateMapBoundaries() { /* ... код стен тот же ... */
         cpBody* staticBody = cpSpaceGetStaticBody(space);
-
-        float w = (width > 0) ? width : 2000;
-        float h = (height > 0) ? height : 2000;
-        float thick = 20.0f;
-
-        auto addWall = [&](Vector2 a, Vector2 b) {
-            cpShape* wall = cpSpaceAddShape(space, cpSegmentShapeNew(staticBody, ToCp(a), ToCp(b), thick));
-            cpShapeSetElasticity(wall, 0.0f);
-            cpShapeSetFriction(wall, 1.0f);
-            cpShapeSetCollisionType(wall, COLLISION_WALL);
+        float thickness = 2000.0f;
+        auto addWall = [&](float x, float y, float w, float h) {
+            cpVect verts[] = { cpv(x, y), cpv(x, y + h), cpv(x + w, y + h), cpv(x + w, y) };
+            cpShape* s = cpSpaceAddShape(space, cpPolyShapeNew(staticBody, 4, verts, cpTransformIdentity, 0.0));
+            cpShapeSetElasticity(s, 0.0f); cpShapeSetFriction(s, 0.0f); cpShapeSetCollisionType(s, COLLISION_WALL);
             };
-
-        addWall({ 0,0 }, { w, 0 });
-        addWall({ 0,h }, { w, h });
-        addWall({ 0,0 }, { 0, h });
-        addWall({ w,0 }, { w, h });
+        addWall(-thickness, -thickness, thickness, height + thickness * 2);
+        addWall(width, -thickness, thickness, height + thickness * 2);
+        addWall(-thickness, -thickness, width + thickness * 2, thickness);
+        addWall(-thickness, height, width + thickness * 2, thickness);
     }
 
     std::shared_ptr<Player> CreatePlayerWithId(uint32_t id) {
         Vector2 startPos = { width / 2.0f, height / 2.0f };
-
+        // Если объект уже был, удаляем старый
+        if (objects.count(id)) objects.erase(id);
 
         auto p = std::make_shared<Player>(id, startPos, space);
+        p->Reset(); // Сброс статов при создании
         objects[id] = p;
         return p;
     }
 
-    std::shared_ptr<Player> CreatePlayer() {
-        return CreatePlayerWithId(nextId++);
+    std::shared_ptr<Enemy> SpawnEnemy() {
+        // ... (код спавна тот же, с рандомом типа) ...
+        float spawnX, spawnY;
+        int side = rand() % 4;
+        float offset = 50.0f;
+        if (side == 0) { spawnX = -offset; spawnY = (float)(rand() % (int)height); }
+        else if (side == 1) { spawnX = width + offset; spawnY = (float)(rand() % (int)height); }
+        else if (side == 2) { spawnX = (float)(rand() % (int)width); spawnY = -offset; }
+        else { spawnX = (float)(rand() % (int)width); spawnY = height + offset; }
+
+        int chance = rand() % 100;
+        uint8_t type = EnemyType::BASIC;
+        if (chance < 60) type = EnemyType::BASIC;
+        else if (chance < 85) type = EnemyType::FAST;
+        else if (chance < 98) type = EnemyType::TANK;
+        else type = EnemyType::BOSS;
+
+        auto enemy = std::make_shared<Enemy>(nextId++, Vector2{ spawnX, spawnY }, type, space);
+        objects[enemy->id] = enemy;
+        return enemy;
     }
 
     void Update(float dt) {
+        cpSpaceSetIterations(space, 10);
         cpSpaceStep(space, dt);
+        EnforceMapBoundaries();
 
         std::vector<std::shared_ptr<Bullet>> newBullets;
 
@@ -3990,52 +4593,152 @@ public:
                 auto p = std::dynamic_pointer_cast<Player>(obj);
                 if (p && p->spawnBulletSignal) {
                     p->spawnBulletSignal = false;
-                    Vector2 spawnPos = ToRay(cpBodyGetPosition(p->body));
-                    auto b = std::make_shared<Bullet>(nextId++, spawnPos, p->bulletDir, p->id, space);
+                    Vector2 playerPos = ToRay(cpBodyGetPosition(p->body));
+                    Vector2 dir = Vector2Normalize(p->bulletDir);
+                    float playerRadius = 20.0f + (p->level - 1) * 2.0f;
+                    float spawnOffset = (playerRadius * 1.8f) + 5.0f;
+                    auto b = std::make_shared<Bullet>(nextId++, Vector2Add(playerPos, Vector2Scale(dir, spawnOffset)), dir, p->id, space);
+                    cpBodySetVelocity(b->body, cpvadd(cpBodyGetVelocity(b->body), cpvmult(cpBodyGetVelocity(p->body), 0.4f)));
                     newBullets.push_back(b);
                 }
             }
+            // AI врагов
+            if (obj->type == EntityType::ENEMY) {
+                auto enemy = std::dynamic_pointer_cast<Enemy>(obj);
+                float minDist = 999999.0f;
+                Vector2 targetPos = { width / 2, height / 2 };
+                for (const auto& [pid, pObj] : objects) {
+                    if (pObj->type == EntityType::PLAYER) {
+                        float dist = Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), ToRay(cpBodyGetPosition(pObj->body)));
+                        if (dist < minDist) { minDist = dist; targetPos = ToRay(cpBodyGetPosition(pObj->body)); }
+                    }
+                }
+                enemy->MoveTowards(targetPos);
+            }
 
-            if (obj->destroyFlag) {
-                it = objects.erase(it);
-            }
-            else {
-                ++it;
-            }
+            if (obj->destroyFlag) it = objects.erase(it);
+            else ++it;
         }
-
         for (auto& b : newBullets) objects[b->id] = b;
 
-        HandleDamageManual();
+        HandleCollisionsAndDamage();
     }
 
-    void HandleDamageManual() {
-        for (auto& [bid, bObj] : objects) {
-            if (bObj->type != EntityType::BULLET) continue;
-            auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
-            Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
+    void EnforceMapBoundaries() { /* ... код тот же ... */
+        for (auto& [id, obj] : objects) {
+            if (obj->type == EntityType::BULLET || !obj->body) continue;
+            cpVect pos = cpBodyGetPosition(obj->body);
+            cpVect vel = cpBodyGetVelocity(obj->body);
+            float r = 20.0f;
+            bool clamped = false;
+            if (pos.x < r) { pos.x = r; if (vel.x < 0) vel.x = 0; clamped = true; }
+            if (pos.x > width - r) { pos.x = width - r; if (vel.x > 0) vel.x = 0; clamped = true; }
+            if (pos.y < r) { pos.y = r; if (vel.y < 0) vel.y = 0; clamped = true; }
+            if (pos.y > height - r) { pos.y = height - r; if (vel.y > 0) vel.y = 0; clamped = true; }
+            if (clamped) { cpBodySetPosition(obj->body, pos); cpBodySetVelocity(obj->body, vel); }
+        }
+    }
+
+    void HandleCollisionsAndDamage() {
+        std::vector<std::shared_ptr<GameObject>> newArtifacts;
+        double currentTime = GetTime();
+
+        // 1. Контактный урон: Враг -> Игрок
+        for (auto& [eid, eObj] : objects) {
+            if (eObj->type != EntityType::ENEMY) continue;
+            auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
+            Vector2 ePos = ToRay(cpBodyGetPosition(enemy->body));
 
             for (auto& [pid, pObj] : objects) {
                 if (pObj->type != EntityType::PLAYER) continue;
-                if (pid == bullet->ownerId) continue;
+                auto player = std::dynamic_pointer_cast<Player>(pObj);
+                Vector2 pPos = ToRay(cpBodyGetPosition(player->body));
 
-                Vector2 pPos = ToRay(cpBodyGetPosition(pObj->body));
-                if (Vector2Distance(bPos, pPos) < 25.0f) {
-                    pObj->health -= 10;
-                    bullet->destroyFlag = true;
+                // Дистанция касания (радиус врага + радиус игрока)
+                float touchDist = 20.0f + (20.0f + (player->level - 1) * 2.0f);
+                if (Vector2Distance(ePos, pPos) < touchDist) {
+                    // Наносим урон игроку (ДПС: урон врага * delta_time, но тут дискретно)
+                    // Для простоты наносим урон каждый кадр, но маленький? Нет, лучше по таймеру
+                    // Но у нас нет dt здесь. Сделаем простой кулдаун атаки у врага? 
+                    // Или просто будем считать это как постоянный урон (DPS)
+                    // В текущей архитектуре проще наносить урон каждый тик физики (60 Гц), поэтому делим на 60
+                    player->TakeDamage(enemy->damage / 60.0f, currentTime);
 
-                    if (pObj->health <= 0) {
-                        pObj->health = 100;
-                        float rx = (float)(rand() % ((int)width - 200) + 100);
-                        float ry = (float)(rand() % ((int)height - 200) + 100);
+                    // Отталкивание
+                    Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
+                    cpBodyApplyImpulseAtLocalPoint(player->body, ToCp(Vector2Scale(knockDir, 50.0f)), cpvzero);
+                }
+            }
+        }
 
-                        cpVect randPos = cpv(rx, ry);
-                        cpBodySetPosition(pObj->body, randPos);
-                        cpBodySetVelocity(pObj->body, cpvzero);
+        // 2. Артефакты
+        for (auto& [aid, aObj] : objects) {
+            if (aObj->type != EntityType::ARTIFACT) continue;
+            Vector2 aPos = ToRay(cpBodyGetPosition(aObj->body));
+            for (auto& [pid, pObj] : objects) {
+                if (pObj->type != EntityType::PLAYER) continue;
+                auto p = std::dynamic_pointer_cast<Player>(pObj);
+                if (Vector2Distance(aPos, ToRay(cpBodyGetPosition(p->body))) < 40.0f) {
+                    auto art = std::dynamic_pointer_cast<Artifact>(aObj);
+                    // Пытаемся положить в инвентарь
+                    if (p->AddItemToInventory(art->bonusType)) {
+                        aObj->destroyFlag = true;
                     }
                 }
             }
         }
+
+        // 3. Пули
+        for (auto& [bid, bObj] : objects) {
+            if (bObj->type != EntityType::BULLET) continue;
+            auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
+            Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
+            // Границы
+            if (bPos.x <= -50 || bPos.x >= width + 50 || bPos.y <= -50 || bPos.y >= height + 50) {
+                bullet->destroyFlag = true; continue;
+            }
+
+            for (auto& [tid, tObj] : objects) {
+                if (tid == bullet->ownerId || tObj->type == EntityType::BULLET || tObj->type == EntityType::ARTIFACT) continue;
+
+                float targetRadius = 30.0f;
+                if (tObj->type == EntityType::ENEMY) {
+                    auto e = std::dynamic_pointer_cast<Enemy>(tObj);
+                    if (e->enemyType == EnemyType::BOSS) targetRadius = 60.0f;
+                }
+
+                if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(tObj->body))) < targetRadius) {
+                    bullet->destroyFlag = true;
+                    float dmg = 10.0f;
+                    std::shared_ptr<Player> attacker = nullptr;
+                    if (objects.count(bullet->ownerId)) {
+                        attacker = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                        if (attacker) dmg = attacker->curDamage;
+                    }
+
+                    tObj->TakeDamage(dmg, currentTime);
+
+                    if (tObj->health <= 0) {
+                        if (tObj->type == EntityType::PLAYER) {
+                            auto p = std::dynamic_pointer_cast<Player>(tObj);
+                            p->Reset(); // Сброс при смерти
+                            cpBodySetPosition(p->body, cpv(rand() % (int)width, rand() % (int)height));
+                            if (attacker) { attacker->AddXp(50.0f + p->level * 10); attacker->kills++; }
+                        }
+                        else if (tObj->type == EntityType::ENEMY) {
+                            tObj->destroyFlag = true;
+                            auto e = std::dynamic_pointer_cast<Enemy>(tObj);
+                            if (attacker) { attacker->AddXp(e->xpReward); attacker->scrap += e->scrapReward; }
+                            if (e->enemyType == EnemyType::BOSS) {
+                                auto art = std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(e->body)), space);
+                                newArtifacts.push_back(art);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (auto& a : newArtifacts) objects[a->id] = a;
     }
 };
 // engine\Scenes\Scene.h
@@ -4261,7 +4964,7 @@ public:
 ﻿#server module CMakeLists.txt
 add_executable(GameServer
     main_server.cpp
- "MasterServerLogic.h")
+ )
 target_include_directories(GameServer PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_link_libraries(GameServer PRIVATE GameEngine GameCommon enet::enet_shared)
 
@@ -4316,390 +5019,4 @@ int main() {
     }
     enet_deinitialize();
     return 0;
-}
-// server\MasterServerLogic.h
-﻿#pragma once
-#define _CRT_SECURE_NO_WARNINGS
-#include <enet.h>
-#include <map>
-#include <string>
-#include <vector>
-#include <iostream>
-#include <cstring>
-#include "../common/NetworkPackets.h"
-
-struct ActiveLobby {
-    ENetAddress address;
-    uint16_t gamePort;
-    std::string name;
-    std::string map;
-    int players;
-    int maxPlayers;
-    double lastHeartbeatTime;
-};
-
-class MasterServer {
-    ENetHost* host = nullptr;
-    std::map<std::string, ActiveLobby> lobbies;
-
-public:
-    bool Start(int port) {
-        ENetAddress address;
-        address.host = ENET_HOST_ANY;
-        address.port = port;
-        host = enet_host_create(&address, 32, 2, 0, 0);
-        return host != nullptr;
-    }
-
-    void Update() {
-        if (!host) return;
-
-        ENetEvent event;
-        while (enet_host_service(host, &event, 0) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_RECEIVE:
-                OnPacket(event.peer, event.packet);
-                enet_packet_destroy(event.packet);
-                break;
-            case ENET_EVENT_TYPE_DISCONNECT:
-                break;
-            }
-        }
-
-        double now = GetTime();
-        for (auto it = lobbies.begin(); it != lobbies.end();) {
-            if (now - it->second.lastHeartbeatTime > 15.0) {
-                std::cout << "Server timed out: " << it->second.name << "\n";
-                it = lobbies.erase(it);
-            }
-            else {
-                ++it;
-            }
-        }
-    }
-
-    void OnPacket(ENetPeer* peer, ENetPacket* packet) {
-        if (packet->dataLength < sizeof(PacketHeader)) return;
-        PacketHeader* header = (PacketHeader*)packet->data;
-
-        char ipStr[64];
-        enet_address_get_host_ip(&peer->address, ipStr, 64);
-        std::string key = std::string(ipStr) + ":" + std::to_string(peer->address.port);
-
-        if (header->type == PacketType::master_REGISTER) {
-            auto* pkt = (MasterRegisterPacket*)packet->data;
-            ActiveLobby lobby;
-            lobby.address = peer->address;
-            lobby.gamePort = pkt->gamePort;
-            lobby.name = pkt->serverName;
-            lobby.map = pkt->mapName;
-            lobby.maxPlayers = pkt->maxPlayers;
-            lobby.players = 0;
-            lobby.lastHeartbeatTime = GetTime();
-
-            lobbies[key] = lobby;
-            std::cout << "Registered server: " << lobby.name << " at " << ipStr << "\n";
-        }
-        else if (header->type == PacketType::master_HEARTBEAT) {
-            auto* pkt = (MasterHeartbeatPacket*)packet->data;
-            if (lobbies.count(key)) {
-                lobbies[key].lastHeartbeatTime = GetTime();
-                lobbies[key].players = pkt->currentPlayers;
-            }
-        }
-        else if (header->type == PacketType::master_LIST_REQ) {
-            SendList(peer);
-        }
-    }
-
-    void SendList(ENetPeer* peer) {
-        size_t dataSize = sizeof(MasterListResponsePacket) + (lobbies.size() * sizeof(LobbyInfo));
-        std::vector<uint8_t> buffer(dataSize);
-
-        MasterListResponsePacket* header = (MasterListResponsePacket*)buffer.data();
-        header->type = PacketType::master_LIST_RES;
-        header->count = (uint16_t)lobbies.size();
-
-        LobbyInfo* infos = (LobbyInfo*)(buffer.data() + sizeof(MasterListResponsePacket));
-        int i = 0;
-        for (const auto& pair : lobbies) {
-            const auto& lobby = pair.second;
-            infos[i].id = i;
-            infos[i].players = lobby.players;
-            infos[i].maxPlayers = lobby.maxPlayers;
-            infos[i].port = lobby.gamePort;
-
-            char ipBuf[64];
-            enet_address_get_host_ip(&lobby.address, ipBuf, 64);
-            strncpy(infos[i].ip, ipBuf, 16);
-
-            strncpy(infos[i].name, lobby.name.c_str(), 31);
-            strncpy(infos[i].mapName, lobby.map.c_str(), 31);
-            i++;
-        }
-
-        ENetPacket* packet = enet_packet_create(buffer.data(), buffer.size(), ENET_PACKET_FLAG_RELIABLE);
-        enet_peer_send(peer, 0, packet);
-    }
-
-    void Stop() {
-        if (host) enet_host_destroy(host);
-    }
-};
-// tests\CMakeLists.txt
-﻿
-    add_executable(test_net
-        test_net.cpp
-    )
-        target_include_directories(test_net PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
-
-    target_link_libraries(test_net PRIVATE enet::enet_shared GameCommon)
-// tests\test_net.cpp
-﻿#define _CRT_SECURE_NO_WARNINGS
-
-#include <iostream>
-#include <thread>
-#include <chrono>
-#include <string>
-#include <atomic>
-#include "enet/ENetServer.h"
-#include "enet/ENetClient.h"
-
-
-std::atomic<bool> serverRunning{ false };
-
-
-std::atomic<bool> running = false;
-
-
-int mainTest() {
-    if (enet_initialize() != 0) {
-        printf("An error occurred while initializing ENet.\n");
-        return 1;
-    }
-
-    ENetAddress address = { 0 };
-
-    address.host = ENET_HOST_ANY; /* Bind the server to the default localhost.     */
-    address.port = 7777; /* Bind the server to port 7777. */
-
-#define MAX_CLIENTS 32
-
-    /* create a server */
-    ENetHost* server = enet_host_create(&address, MAX_CLIENTS, 2, 0, 0);
-
-    if (server == NULL) {
-        printf("An error occurred while trying to create an ENet server host.\n");
-        return 1;
-    }
-    running.store(true);
-    printf("Started a server...\n");
-
-
-    std::thread([&]() {
-        ENetEvent event;
-        while (enet_host_service(server, &event, 1000) > 0) {
-            switch (event.type) {
-            case ENET_EVENT_TYPE_CONNECT:
-                printf("A new client connected from %x:%u.\n", event.peer->address.host, event.peer->address.port);
-                /* Store any relevant client information here. */
-                event.peer->data = (void*)"Client information";
-                break;
-
-            case ENET_EVENT_TYPE_RECEIVE:
-                printf("A packet of length %lu containing %s was received from %s on channel %u.\n",
-                    event.packet->dataLength,
-                    event.packet->data,
-                    event.peer->data,
-                    event.channelID);
-                /* Clean up the packet now that we're done using it. */
-                enet_packet_destroy(event.packet);
-                break;
-
-            case ENET_EVENT_TYPE_DISCONNECT:
-                printf("%s disconnected.\n", event.peer->data);
-                /* Reset the peer's client information. */
-                event.peer->data = NULL;
-                break;
-
-            case ENET_EVENT_TYPE_DISCONNECT_TIMEOUT:
-                printf("%s disconnected due to timeout.\n", event.peer->data);
-                /* Reset the peer's client information. */
-                event.peer->data = NULL;
-                break;
-
-            case ENET_EVENT_TYPE_NONE:
-                break;
-            }
-        }
-        }).detach();
-    while (!running)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    ENetHost* client = { 0 };
-    client = enet_host_create(NULL /* create a client host */,
-        1 /* only allow 1 outgoing connection */,
-        2 /* allow up 2 channels to be used, 0 and 1 */,
-        0 /* assume any amount of incoming bandwidth */,
-        0 /* assume any amount of outgoing bandwidth */);
-    if (client == NULL) {
-        fprintf(stderr,
-            "An error occurred while trying to create an ENet client host.\n");
-        exit(EXIT_FAILURE);
-    }
-
-    //ENetAddress address = { 0 };
-    ENetEvent event;
-    ENetPeer* peer = { 0 };
-    /* Connect to some.server.net:1234. */
-    enet_address_set_host(&address, "127.0.0.1");
-    address.port = 7777;
-    /* Initiate the connection, allocating the two channels 0 and 1. */
-    peer = enet_host_connect(client, &address, 2, 0);
-    if (peer == NULL) {
-        fprintf(stderr,
-            "No available peers for initiating an ENet connection.\n");
-        exit(EXIT_FAILURE);
-    }
-    /* Wait up to 5 seconds for the connection attempt to succeed. */
-    if (enet_host_service(client, &event, 5000) > 0 &&
-        event.type == ENET_EVENT_TYPE_CONNECT) {
-        puts("Connection to some.server.net:1234 succeeded.");
-    }
-    else {
-        /* Either the 5 seconds are up or a disconnect event was */
-        /* received. Reset the peer in the event the 5 seconds   */
-        /* had run out without any significant event.            */
-        enet_peer_reset(peer);
-        puts("Connection to some.server.net:1234 failed.");
-    }
-
-    // Receive some events
-    enet_host_service(client, &event, 5000);
-
-    // Disconnect
-    enet_peer_disconnect(peer, 0);
-
-    uint8_t disconnected = false;
-    /* Allow up to 3 seconds for the disconnect to succeed
-     * and drop any packets received packets.
-     */
-    while (enet_host_service(client, &event, 3000) > 0) {
-        switch (event.type) {
-        case ENET_EVENT_TYPE_RECEIVE:
-            enet_packet_destroy(event.packet);
-            break;
-        case ENET_EVENT_TYPE_DISCONNECT:
-            puts("Disconnection succeeded.");
-            disconnected = true;
-            break;
-        }
-    }
-
-    // Drop connection, since disconnection didn't successed
-    if (!disconnected) {
-        enet_peer_reset(peer);
-    }
-
-    enet_host_destroy(client);
-    enet_deinitialize();
-    return 0;
-}
-
-
-
-int mainClient() {
-
-
-    if (enet_initialize() != 0) {
-        std::cerr << "FATAL: Failed to initialize ENet!" << std::endl;
-        return -1;
-    }
-    ENetClient::Shared client;
-    ENetServer::Shared server;
-    //atexit(enet_deinitialize);
-
-    std::cout << "--- STARTING NETWORK TEST ---" << std::endl;
-    int port = 7777;
-    server = ENetServer::alloc();
-    if (!server->start(port)) {
-        std::cerr << "SERVER: Failed to start on port " << port << "!" << std::endl;
-        return 1;
-    }
-    std::cout << "SERVER: Listening on port " << port << std::endl;
-    serverRunning = true;
-    std::thread sThread([&]() {
-
-
-        while (serverRunning) {
-            auto msgs = server->poll();
-
-            for (auto& msg : msgs) {
-                if (msg->type() == MessageType::CONNECT) {
-                    std::cout << "SERVER: Client connected! ID: " << msg->peerId() << std::endl;
-                }
-                else if (msg->type() == MessageType::DATA) {
-                    std::string s;
-                    msg->stream()->read(s);
-                    std::cout << "SERVER: Received data: " << s << std::endl;
-                }
-                else if (msg->type() == MessageType::DISCONNECT) {
-                    std::cout << "SERVER: Client disconnected." << std::endl;
-                }
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-
-        server->stop();
-        server.reset();
-        std::cout << "SERVER: Stopped." << std::endl;
-        
-        
-        
-        });
-
-    while (!serverRunning)
-    {
-        std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-    client = ENetClient::alloc();
-    std::cout << "CLIENT: Connecting to 127.0.0.1:" << port << "..." << std::endl;
-
-    if (client->connect("127.0.0.1", port)) {
-        std::cout << "CLIENT: Connected successfully!" << std::endl;
-
-        auto stream = StreamBuffer::alloc();
-        stream->write(std::string("Hello Server!"));
-        client->send(DeliveryType::RELIABLE, stream);
-        std::cout << "CLIENT: Data sent." << std::endl;
-
-        std::cout << "CLIENT: Polling loop started..." << std::endl;
-        for (int i = 0; i < 50; i++) {
-            client->poll();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
-    }
-    else {
-        std::cerr << "CLIENT: Failed to connect. Check firewall or server status." << std::endl;
-    }
-    std::cout << "--- STOPPING ---" << std::endl;
-    serverRunning = false;
-
-    if (sThread.joinable()) {
-        sThread.join();
-    }
-
-    client.reset();
-    
-
-    std::cout << "--- TEST FINISHED ---" << std::endl;
-    return 0;
-}
-
-
-int main()
-{
-    //mainTest();
-    mainClient();
 }

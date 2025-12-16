@@ -16,7 +16,6 @@ public:
 
 	std::shared_ptr<Scene> currentScene;
 	std::shared_ptr<Scene> nextScene;
-
 	GameClient();
 	~GameClient();
 

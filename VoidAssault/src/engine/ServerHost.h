@@ -15,6 +15,9 @@ class ServerHost {
     std::atomic<bool> running{ false };
     std::thread serverThread;
 
+        double waveTimer = 0.0;
+    double timeToNextWave = 5.0;     int waveCount = 1;
+
 public:
     ServerHost();
     ~ServerHost();

@@ -1,7 +1,5 @@
 ﻿#pragma once
-#if defined(_WIN32)
 #include "fix_win32_compatibility.h"
-#endif
 #include "raylib.h"
 #include "chipmunk/chipmunk.h"
 #include "../../common/NetworkPackets.h"
@@ -27,20 +25,21 @@ public:
     float health = 100.0f;
     float maxHealth = 100.0f;
 
+    double lastDamageTime = 0.0;
+
     GameObject(uint32_t _id, EntityType _type) : id(_id), type(_type) {}
 
     virtual ~GameObject() {
         if (spaceRef) {
-            if (shape) {
-                cpSpaceRemoveShape(spaceRef, shape);
-                cpShapeFree(shape);
-            }
-            if (body) {
-                cpSpaceRemoveBody(spaceRef, body);
-                cpBodyFree(body);
-            }
+            if (shape) { cpSpaceRemoveShape(spaceRef, shape); cpShapeFree(shape); }
+            if (body) { cpSpaceRemoveBody(spaceRef, body); cpBodyFree(body); }
         }
     }
 
     virtual void Update(float dt) = 0;
+
+    void TakeDamage(float amount, double currentTime) {
+        health -= amount;
+        lastDamageTime = currentTime;
+    }
 };

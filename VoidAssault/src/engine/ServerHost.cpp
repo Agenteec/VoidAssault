@@ -54,6 +54,10 @@ void ServerHost::ServerLoop() {
     double snapshotTimer = 0.0;
     double statsTimer = 0.0;
 
+    waveCount = 1;
+    waveTimer = 0.0;
+    timeToNextWave = 5.0;
+
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
         double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
@@ -61,9 +65,67 @@ void ServerHost::ServerLoop() {
 
         if (frameTime > 0.25) frameTime = 0.25;
 
+                if (netServer->numClients() == 0) {
+            bool hasEntities = false;
+            for (auto& pair : gameScene.objects) {
+                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) { hasEntities = true; break; }
+            }
+
+            if (waveCount > 1 || hasEntities) {
+                auto it = gameScene.objects.begin();
+                while (it != gameScene.objects.end()) {
+                    if (it->second->type == EntityType::ENEMY ||
+                        it->second->type == EntityType::BULLET ||
+                        it->second->type == EntityType::ARTIFACT) {
+                        it = gameScene.objects.erase(it);
+                    }
+                    else {
+                        ++it;
+                    }
+                }
+                waveCount = 1;
+                waveTimer = 0;
+                timeToNextWave = 5.0;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            auto msgs = netServer->poll();
+            for (auto& msg : msgs) {
+                if (msg->type() == MessageType::CONNECT) {
+                    uint32_t peerId = msg->peerId();
+                    std::cout << "Client " << peerId << " connected (waking up).\n";
+                    auto player = gameScene.CreatePlayerWithId(peerId);
+                    InitPacket initPkt; initPkt.playerId = player->id;
+                    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                    ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+                    netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                }
+            }
+            continue;
+        }
+
         accumulator += frameTime;
         snapshotTimer += frameTime;
         statsTimer += frameTime;
+
+                waveTimer += frameTime;
+        if (waveTimer >= timeToNextWave) {
+            waveTimer = 0.0;
+            timeToNextWave = 15.0;
+
+            int currentEnemies = 0;
+            for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
+
+            if (currentEnemies < 80) {
+                int enemiesToSpawn = 3 + waveCount;
+                if (enemiesToSpawn > 30) enemiesToSpawn = 30;
+
+                std::cout << "SERVER: Spawning Wave " << waveCount << std::endl;
+                for (int i = 0; i < enemiesToSpawn; i++) {
+                    gameScene.SpawnEnemy();
+                }
+                waveCount++;
+            }
+        }
 
         auto msgs = netServer->poll();
         for (auto& msg : msgs) {
@@ -88,6 +150,7 @@ void ServerHost::ServerLoop() {
                     InputAdapter ia(buf.begin() + offset, buf.end());
                     bitsery::Deserializer<InputAdapter> des(std::move(ia));
                     uint8_t type; des.value1b(type);
+
                     if (type == GamePacket::INPUT) {
                         PlayerInputPacket inp; des.object(inp);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
@@ -101,6 +164,22 @@ void ServerHost::ServerLoop() {
                             }
                         }
                     }
+                                        else if (type == GamePacket::ACTION) {
+                        ActionPacket act; des.object(act);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            if (gameScene.objects.count(peerId)) {
+                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                                if (p) {
+                                                                        if (act.type == ActionType::UPGRADE_BUILDING) {
+                                        gameScene.TryUpgrade(peerId, act.target);
+                                    }
+                                    else {
+                                        gameScene.TryBuild(peerId, act.type, act.target);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -110,12 +189,23 @@ void ServerHost::ServerLoop() {
             accumulator -= dt;
         }
 
-        if (snapshotTimer >= 0.033) {
+                if (!gameScene.pendingEvents.empty()) {
+            for (const auto& evt : gameScene.pendingEvents) {
+                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::EVENT);
+                ser.object(evt);
+                ser.adapter().flush();
+                netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+            }
+            gameScene.pendingEvents.clear();
+        }
+
+                if (snapshotTimer >= 0.033) {
             BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-        if (statsTimer >= 0.2) {
+                if (statsTimer >= 0.2) {
             for (auto& [id, obj] : gameScene.objects) {
                 if (obj->type == EntityType::PLAYER) {
                     auto p = std::dynamic_pointer_cast<Player>(obj);
@@ -127,7 +217,11 @@ void ServerHost::ServerLoop() {
                     stats.maxHealth = p->maxHealth;
                     stats.damage = p->curDamage;
                     stats.speed = p->curSpeed;
+                    stats.scrap = p->scrap;
+                    stats.kills = p->kills;
+                    stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
 
+                    
                     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                     ser.value1b(GamePacket::STATS);
                     ser.object(stats);
@@ -148,6 +242,7 @@ void ServerHost::BroadcastSnapshot() {
 
     WorldSnapshotPacket snap;
     snap.serverTime = GetSystemTime();
+    snap.wave = waveCount;
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
@@ -156,7 +251,7 @@ void ServerHost::BroadcastSnapshot() {
         if (obj->body) {
             cpVect pos = cpBodyGetPosition(obj->body);
             state.position = ToRay(pos);
-            state.rotation = (float)cpBodyGetAngle(obj->body) * RAD2DEG;
+            state.rotation = obj->rotation;
         }
         else {
             state.position = { 0,0 }; state.rotation = 0;
@@ -166,17 +261,25 @@ void ServerHost::BroadcastSnapshot() {
         state.maxHealth = obj->maxHealth;
         state.type = obj->type;
         state.color = obj->color;
-
         state.level = 1;
         state.radius = 20.0f;
+        state.kills = 0;
 
         if (obj->type == EntityType::PLAYER) {
             auto p = std::dynamic_pointer_cast<Player>(obj);
-            if (p) state.level = p->level;
+            if (p) {
+                state.level = p->level;
+                state.kills = p->kills;
+            }
         }
-        else if (obj->type == EntityType::BULLET) {
-            state.radius = 5.0f;
+        else if (obj->type == EntityType::BULLET) state.radius = 5.0f;
+        else if (obj->type == EntityType::ENEMY) {
+            auto e = std::dynamic_pointer_cast<Enemy>(obj);
+            if (e) state.subtype = e->enemyType;
         }
+        else if (obj->type == EntityType::WALL) state.radius = 25.0f;
+        else if (obj->type == EntityType::TURRET) state.radius = 20.0f;
+        else if (obj->type == EntityType::MINE) state.radius = 15.0f;
 
         snap.entities.push_back(state);
     }
