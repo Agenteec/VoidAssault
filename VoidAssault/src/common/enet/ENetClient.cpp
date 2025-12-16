@@ -20,10 +20,6 @@ ENetClient::ENetClient()
     , server_(nullptr)
     , currentMsgId_(0)
 {
-    /*host_ = enet_host_create(nullptr, 1, NUM_CHANNELS, 0, 0);
-    if (!host_) {
-        LOG_ERROR("Client host creation failed (ENet might not be initialized yet)");
-    }*/
 }
 
 ENetClient::~ENetClient()
@@ -60,13 +56,10 @@ bool ENetClient::connect(const std::string& host, uint32_t port)
     }
 
     ENetEvent event;
-    // Ждем подключения (блокирующе)
     if (enet_host_service(host_, &event, TIMEOUT_MS) > 0 && event.type == ENET_EVENT_TYPE_CONNECT) {
         LOG_DEBUG("Connection to `" << host << ":" << port << "` succeeded");
-
         auto msg = Message::alloc(SERVER_ID, MessageType::CONNECT);
         queue_.push_back(msg);
-
         return true;
     }
 
@@ -79,7 +72,6 @@ bool ENetClient::connect(const std::string& host, uint32_t port)
 bool ENetClient::disconnect()
 {
     if (!host_ || !server_) return false;
-
     if (!isConnected()) return false;
 
     LOG_DEBUG("Disconnecting from server...");
@@ -152,7 +144,8 @@ void ENetClient::sendMessage(DeliveryType type, Message::Shared msg) const
     ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
 
     enet_peer_send(server_, channel, p);
-    enet_host_flush(host_);
+
+    // enet_host_flush(host_); 
 }
 
 void ENetClient::send(DeliveryType type, StreamBuffer::Shared stream) const
@@ -195,9 +188,13 @@ std::vector<Message::Shared> ENetClient::poll()
     if (!host_) return msgs;
 
     ENetEvent event;
-    while (true) {
+    int packetsProcessed = 0;
+    const int MAX_PACKETS_PER_FRAME = 100;
+
+    while (packetsProcessed < MAX_PACKETS_PER_FRAME) {
         int32_t res = enet_host_service(host_, &event, 0);
         if (res > 0) {
+            packetsProcessed++;
             if (event.type == ENET_EVENT_TYPE_RECEIVE) {
                 auto stream = StreamBuffer::alloc(event.packet->data, event.packet->dataLength);
                 auto msg = Message::alloc(SERVER_ID);
@@ -208,7 +205,6 @@ std::vector<Message::Shared> ENetClient::poll()
                     handleRequest(msg->requestId(), msg->stream());
                 }
                 enet_packet_destroy(event.packet);
-
             }
             else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
                 auto msg = Message::alloc(SERVER_ID, MessageType::DISCONNECT);

@@ -795,13 +795,9 @@ void GameplayScene::OnMessage(Message::Shared msg) {
     else if (packetTypeInt == GamePacket::EVENT) {
         EventPacket evt; deserializer.object(evt);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
-            if (evt.type == 0) particles.SpawnExplosion(evt.pos, 4, evt.color); // Bullet hit
-            else if (evt.type == 1) particles.SpawnExplosion(evt.pos, 20, evt.color); // Death
-            else if (evt.type == 2) {
-                // Upgrade / Loot event
-                particles.SpawnExplosion(evt.pos, 15, evt.color);
-                // Кольцо улучшения
-                for (int i = 0; i < 360; i += 20) {
+            if (evt.type == 0) particles.SpawnExplosion(evt.pos, 4, evt.color);             else if (evt.type == 1) particles.SpawnExplosion(evt.pos, 20, evt.color);             else if (evt.type == 2) {
+                                particles.SpawnExplosion(evt.pos, 15, evt.color);
+                                for (int i = 0; i < 360; i += 20) {
                     float ang = i * DEG2RAD;
                     Vector2 vel = { cosf(ang) * 100.0f, sinf(ang) * 100.0f };
                     particles.Spawn(evt.pos, vel, evt.color, 4.0f, 0.5f);
@@ -963,14 +959,9 @@ void GameplayScene::Draw() {
                 Color enemyColor = Theme::COLOR_RED; int sides = 3;
                 switch (renderState.subtype) {
                 case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break;
-                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break; // Четырехугольник или пятиугольник (Пентагон)
-                    // Для пентагона sides должно быть 5, но в коде Enemy.h оно может быть настроено иначе. 
-                    // Предположим Tank = Пентагон.
-                case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break; // Босс
-                }
+                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;                                                         case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break;                 }
 
-                // Корректировка сторон если TANK это пентагон
-                if (renderState.subtype == EnemyType::TANK) sides = 5;
+                                if (renderState.subtype == EnemyType::TANK) sides = 5;
 
                 DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 });
                 DrawPoly(pos, sides, radius, rot, enemyColor);
@@ -985,38 +976,31 @@ void GameplayScene::Draw() {
             else if (renderState.type == EntityType::WALL) {
                 Rectangle r = { renderState.position.x - 25, renderState.position.y - 25, 50, 50 };
 
-                // Цвет меняется в зависимости от здоровья
-                float hpRatio = renderState.health / renderState.maxHealth;
+                                float hpRatio = renderState.health / renderState.maxHealth;
                 Color baseColor = GRAY;
                 if (hpRatio < 0.5f) baseColor = DARKGRAY;
 
                 DrawRectangleRec(r, baseColor);
                 DrawRectangleLinesEx(r, 2, DARKGRAY);
 
-                // NEW: Визуализация уровня стены
-                if (renderState.level >= 1) {
-                    // Уровень 1: Просто рамка (уже есть)
-                    DrawRectangleLinesEx({ r.x + 5, r.y + 5, r.width - 10, r.height - 10 }, 1, LIGHTGRAY);
+                                if (renderState.level >= 1) {
+                                        DrawRectangleLinesEx({ r.x + 5, r.y + 5, r.width - 10, r.height - 10 }, 1, LIGHTGRAY);
                 }
                 if (renderState.level >= 2) {
-                    // Уровень 2: Перекрестие
-                    DrawLineEx({ r.x, r.y }, { r.x + r.width, r.y + r.height }, 2, BLACK);
+                                        DrawLineEx({ r.x, r.y }, { r.x + r.width, r.y + r.height }, 2, BLACK);
                     DrawLineEx({ r.x + r.width, r.y }, { r.x, r.y + r.height }, 2, BLACK);
                 }
                 if (renderState.level >= 3) {
-                    // Уровень 3: Усиленные углы
-                    DrawRectangle(r.x - 2, r.y - 2, 10, 10, GOLD);
+                                        DrawRectangle(r.x - 2, r.y - 2, 10, 10, GOLD);
                     DrawRectangle(r.x + r.width - 8, r.y - 2, 10, 10, GOLD);
                     DrawRectangle(r.x - 2, r.y + r.height - 8, 10, 10, GOLD);
                     DrawRectangle(r.x + r.width - 8, r.y + r.height - 8, 10, 10, GOLD);
                 }
-                // Индикаторы уровня (точки)
-                for (int i = 0; i < renderState.level; i++)
+                                for (int i = 0; i < renderState.level; i++)
                     DrawRectangle(r.x + i * 8 + 3, r.y + 2, 4, 4, Theme::COL_ACCENT);
 
 
-                // Полоска HP
-                if (hpRatio < 1.0f) {
+                                if (hpRatio < 1.0f) {
                     DrawRectangle(r.x, r.y - 8, 50, 4, RED);
                     DrawRectangle(r.x, r.y - 8, 50 * hpRatio, 4, GREEN);
                 }
@@ -1027,10 +1011,8 @@ void GameplayScene::Draw() {
                 DrawCircleLines(renderState.position.x, renderState.position.y, 20, BLACK);
                 DrawCircleV(renderState.position, 8, DARKPURPLE);
 
-                // FIX: Вращающиеся шарики (визуал уровня)
-                if (renderState.level > 0) {
-                    int orbs = renderState.level; // Кол-во шариков = уровень
-                    float time = (float)GetTime();
+                                if (renderState.level > 0) {
+                    int orbs = renderState.level;                     float time = (float)GetTime();
                     float orbitRadius = 28.0f;
 
                     for (int i = 0; i < orbs; i++) {
@@ -1051,19 +1033,14 @@ void GameplayScene::Draw() {
                 }
             }
             else if (renderState.type == EntityType::MINE) {
-                // Пульсация
-                float pulse = 1.0f + sinf((float)GetTime() * 5.0f) * 0.1f;
+                                float pulse = 1.0f + sinf((float)GetTime() * 5.0f) * 0.1f;
                 DrawCircleV(renderState.position, 15 * pulse, ORANGE);
                 DrawCircleLines(renderState.position.x, renderState.position.y, 15 * pulse, RED);
 
-                // Центр мины
-                DrawCircleV(renderState.position, 5, RED);
+                                DrawCircleV(renderState.position, 5, RED);
 
-                // NEW: Визуализация радиуса взрыва
-                // Радиус растет с уровнем: 100 -> 150 -> 200
-                float splashRad = 100.0f + (renderState.level - 1) * 50.0f;
-                // Рисуем полупрозрачный круг опасности
-                DrawCircleV(renderState.position, splashRad, Fade(RED, 0.1f));
+                                                float splashRad = 100.0f + (renderState.level - 1) * 50.0f;
+                                DrawCircleV(renderState.position, splashRad, Fade(RED, 0.1f));
                 DrawRing(renderState.position, splashRad, splashRad + 1.0f, 0, 360, 32, Fade(RED, 0.3f));
             }
             else if (renderState.type == EntityType::ARTIFACT) {
@@ -1146,16 +1123,14 @@ void GameplayScene::DrawGUI() {
     char waveText[32]; sprintf(waveText, "WAVE %d", currentWave);
     DrawText(waveText, (w - MeasureText(waveText, 30 * uiScale)) / 2, padding, 30 * uiScale, Theme::COL_ACCENT);
 
-    // Build Menu
-    const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
+        const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
     int costs[] = { 10, 50, 25 };
     float bY = h - 200 * uiScale; float bX = w - 130 * uiScale;
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     bY = h - 350 * uiScale; bX = w - 100 * uiScale;
 #endif
 
-    // Считаем турели для UI
-    int myTurretCount = 0;
+        int myTurretCount = 0;
     if (!snapshotManager.history.empty()) {
         for (const auto& e : snapshotManager.history.back().entities) {
             if (e.type == EntityType::TURRET && e.ownerId == myPlayerId) myTurretCount++;
@@ -1269,8 +1244,7 @@ void GameplayScene::DrawAdminPanel() {
     y += 40 * uiScale;
     if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Spawn Boss")) SendAdminCmd(AdminCmdType::SPAWN_BOSS, 0);
     y += 40 * uiScale;
-    // FIX: Новые кнопки
-    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Clear Buildings")) SendAdminCmd(AdminCmdType::CLEAR_BUILDINGS, 0);
+        if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Clear Buildings")) SendAdminCmd(AdminCmdType::CLEAR_BUILDINGS, 0);
     y += 40 * uiScale;
     if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "RESET SERVER")) SendAdminCmd(AdminCmdType::RESET_SERVER, 0);
 }
@@ -1462,7 +1436,7 @@ void MainMenuScene::DrawGUI() {
         float panelY = (h - panelH) / 2.0f + (h * 0.05f);
 
         Rectangle menuRect = { cx - panelW / 2, panelY, panelW, panelH };
-        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.5(16.12.2025)", font);
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.6(16.12.2025)", font);
         float currentY = panelY + panelPadding;
 
         if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
@@ -2252,21 +2226,11 @@ typename T::mapped_type get(T const& map, typename T::key_type const& key)
 #include <vector>
 #include <string>
 
-// Типы сетевых пакетов
 namespace GamePacket {
     enum Type : uint8_t {
-        JOIN = 0,       // Отправка ника при подключении
-        INPUT,          // Ввод игрока (движение, стрельба)
-        INIT,           // Инициализация (присвоение ID)
-        SNAPSHOT,       // Состояние мира (сущности)
-        EVENT,          // Одноразовые события (взрывы, звуки)
-        STATS,          // Личная статистика (XP, инвентарь)
-        ACTION,         // Действия (строительство, апгрейд)
-        ADMIN_CMD       // Админские команды
-    };
+        JOIN = 0,               INPUT,                  INIT,                   SNAPSHOT,               EVENT,                  STATS,                  ACTION,                 ADMIN_CMD           };
 }
 
-// Типы действий игрока (строительство/улучшение)
 namespace ActionType {
     enum : uint8_t {
         BUILD_WALL = 1,
@@ -2276,7 +2240,6 @@ namespace ActionType {
     };
 }
 
-// Типы команд администратора
 namespace AdminCmdType {
     enum : uint8_t {
         LOGIN = 0,
@@ -2284,12 +2247,9 @@ namespace AdminCmdType {
         GIVE_XP,
         KILL_ALL_ENEMIES,
         SPAWN_BOSS,
-        CLEAR_BUILDINGS, // NEW
-        RESET_SERVER     // NEW
-    };
+        CLEAR_BUILDINGS,         RESET_SERVER         };
 }
 
-// Типы игровых сущностей
 enum class EntityType : uint8_t {
     PLAYER,
     BULLET,
@@ -2300,7 +2260,6 @@ enum class EntityType : uint8_t {
     MINE
 };
 
-// Подтипы врагов
 namespace EnemyType {
     enum : uint8_t {
         BASIC = 0,
@@ -2312,7 +2271,6 @@ namespace EnemyType {
     };
 }
 
-// Типы артефактов (бонусов)
 namespace ArtifactType {
     enum : uint8_t {
         DAMAGE = 0,
@@ -2323,17 +2281,14 @@ namespace ArtifactType {
     };
 }
 
-// Пакет: Вход в игру (отправка ника)
 struct JoinPacket {
     std::string name;
 
     template <typename S>
     void serialize(S& s) {
-        s.text1b(name, 32); // Макс. длина ника 32 символа
-    }
+        s.text1b(name, 32);     }
 };
 
-// Пакет: Событие (взрыв, эффект)
 struct EventPacket {
     uint8_t type;
     Vector2 pos;
@@ -2347,11 +2302,8 @@ struct EventPacket {
     }
 };
 
-// Пакет: Действие игрока
 struct ActionPacket {
-    uint8_t type;       // ActionType
-    Vector2 target;     // Координаты клика
-
+    uint8_t type;           Vector2 target;     
     template <typename S>
     void serialize(S& s) {
         s.value1b(type);
@@ -2359,11 +2311,8 @@ struct ActionPacket {
     }
 };
 
-// Пакет: Команда админа
 struct AdminCommandPacket {
-    uint8_t cmdType;    // AdminCmdType
-    uint32_t value;     // Значение (сколько опыта/ресурсов дать)
-
+    uint8_t cmdType;        uint32_t value;     
     template <typename S>
     void serialize(S& s) {
         s.value1b(cmdType);
@@ -2371,7 +2320,6 @@ struct AdminCommandPacket {
     }
 };
 
-// Пакет: Личная статистика игрока (для GUI)
 struct PlayerStatsPacket {
     uint32_t level;
     float currentXp;
@@ -2399,7 +2347,6 @@ struct PlayerStatsPacket {
     }
 };
 
-// Пакет: Ввод игрока (каждый кадр)
 struct PlayerInputPacket {
     Vector2 movement;
     Vector2 aimTarget;
@@ -2413,7 +2360,6 @@ struct PlayerInputPacket {
     }
 };
 
-// Структура состояния одной сущности (часть Snapshot)
 struct EntityState {
     uint32_t id = 0;
     Vector2 position = { 0,0 };
@@ -2427,8 +2373,7 @@ struct EntityState {
     uint32_t level = 1;
     uint32_t kills = 0;
     std::string name = "";
-    uint32_t ownerId = 0; // ID владельца (для подсчета турелей и цвета пуль)
-
+    uint32_t ownerId = 0; 
     template <typename S>
     void serialize(S& s) {
         s.value4b(id);
@@ -2437,8 +2382,7 @@ struct EntityState {
         s.value4b(health);
         s.value4b(maxHealth);
 
-        // Сериализация Enum как uint8
-        uint8_t typeInt = static_cast<uint8_t>(type);
+                uint8_t typeInt = static_cast<uint8_t>(type);
         s.value1b(typeInt);
         type = static_cast<EntityType>(typeInt);
 
@@ -2447,12 +2391,10 @@ struct EntityState {
         s.object(color);
         s.value4b(level);
         s.value4b(kills);
-        s.text1b(name, 16); // Ограничиваем длину имени в снепшоте (экономия трафика)
-        s.value4b(ownerId);
+        s.text1b(name, 16);         s.value4b(ownerId);
     }
 };
 
-// Пакет: Снимок мира (рассылается всем)
 struct WorldSnapshotPacket {
     double serverTime;
     uint32_t wave;
@@ -2462,11 +2404,9 @@ struct WorldSnapshotPacket {
     void serialize(S& s) {
         s.value8b(serverTime);
         s.value4b(wave);
-        s.container(entities, 10000); // Лимит объектов
-    }
+        s.container(entities, 10000);     }
 };
 
-// Пакет: Инициализация (при подключении)
 struct InitPacket {
     uint32_t playerId;
 
@@ -4073,7 +4013,6 @@ inline Vector2 ToRay(cpVect v) {
 #include <signal.h>
 #endif
 
-// Утилита для получения времени
 double GetSystemTime() {
     static auto start = std::chrono::high_resolution_clock::now();
     auto now = std::chrono::high_resolution_clock::now();
@@ -4093,8 +4032,7 @@ bool ServerHost::Start(int port) {
     if (running) return false;
 
 #if defined(__linux__) || defined(__APPLE__)
-    // Игнорируем SIGPIPE, чтобы сервер не падал при разрыве соединения
-    signal(SIGPIPE, SIG_IGN);
+        signal(SIGPIPE, SIG_IGN);
 #endif
 
     if (!netServer->start(port)) return false;
@@ -4115,8 +4053,7 @@ void ServerHost::ServerLoop() {
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     double accumulator = 0.0;
-    const double dt = 1.0 / 60.0; // Физика 60 FPS
-
+    const double dt = 1.0 / 60.0; 
     double snapshotTimer = 0.0;
     double statsTimer = 0.0;
 
@@ -4129,21 +4066,17 @@ void ServerHost::ServerLoop() {
         double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        if (frameTime > 0.25) frameTime = 0.25; // Защита от спирали смерти
-
-        // 1. Если игроков нет, ставим игру на "паузу" или сбрасываем
-        if (netServer->numClients() == 0) {
+        if (frameTime > 0.25) frameTime = 0.25; 
+                if (netServer->numClients() == 0) {
             bool hasEntities = false;
             for (auto& pair : gameScene.objects) {
-                // Если остались только пассивные объекты, можно сбрасывать
-                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
+                                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
                     hasEntities = true; break;
                 }
             }
 
             if (waveCount > 1 || hasEntities) {
-                // Очистка карты при пустом сервере
-                auto it = gameScene.objects.begin();
+                                auto it = gameScene.objects.begin();
                 while (it != gameScene.objects.end()) {
                     if (it->second->type == EntityType::ENEMY ||
                         it->second->type == EntityType::BULLET ||
@@ -4159,11 +4092,9 @@ void ServerHost::ServerLoop() {
                 timeToNextWave = 5.0;
             }
 
-            // Легкий сон, чтобы не грузить CPU в простое
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
-            // Опрос на подключение первого игрока
-            auto msgs = netServer->poll();
+                        auto msgs = netServer->poll();
             for (auto& msg : msgs) {
                 if (msg->type() == MessageType::CONNECT) {
                     uint32_t peerId = msg->peerId();
@@ -4179,22 +4110,19 @@ void ServerHost::ServerLoop() {
             continue;
         }
 
-        // 2. Таймеры
-        accumulator += frameTime;
+                accumulator += frameTime;
         snapshotTimer += frameTime;
         statsTimer += frameTime;
         waveTimer += frameTime;
 
-        // 3. Логика волн
-        if (waveTimer >= timeToNextWave) {
+                if (waveTimer >= timeToNextWave) {
             waveTimer = 0.0;
             timeToNextWave = 20.0 + (waveCount * 2.0);
 
             int currentEnemies = 0;
             for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
 
-            if (currentEnemies < 120) { // Лимит врагов
-                int enemiesToSpawn = 5 + (waveCount * 2);
+            if (currentEnemies < 120) {                 int enemiesToSpawn = 5 + (waveCount * 2);
                 if (enemiesToSpawn > 60) enemiesToSpawn = 60;
 
                 std::cout << "SERVER: Spawning Wave " << waveCount << " (" << enemiesToSpawn << " enemies)\n";
@@ -4202,8 +4130,7 @@ void ServerHost::ServerLoop() {
                     gameScene.SpawnEnemy();
                 }
 
-                // Каждую 5-ю волну спавним Босса
-                if (waveCount % 5 == 0) {
+                                if (waveCount % 5 == 0) {
                     gameScene.SpawnEnemy(EnemyType::BOSS);
                 }
 
@@ -4211,8 +4138,7 @@ void ServerHost::ServerLoop() {
             }
         }
 
-        // 4. Обработка сети
-        auto msgs = netServer->poll();
+                auto msgs = netServer->poll();
         for (auto& msg : msgs) {
             uint32_t peerId = msg->peerId();
 
@@ -4285,14 +4211,12 @@ void ServerHost::ServerLoop() {
             }
         }
 
-        // 5. Физический апдейт (фиксированный шаг)
-        while (accumulator >= dt) {
+                while (accumulator >= dt) {
             gameScene.Update((float)dt);
             accumulator -= dt;
         }
 
-        // 6. Отправка событий (взрывы, эффекты)
-        if (!gameScene.pendingEvents.empty()) {
+                if (!gameScene.pendingEvents.empty()) {
             for (const auto& evt : gameScene.pendingEvents) {
                 Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                 ser.value1b(GamePacket::EVENT);
@@ -4303,14 +4227,12 @@ void ServerHost::ServerLoop() {
             gameScene.pendingEvents.clear();
         }
 
-        // 7. Рассылка состояния мира (Snapshot) ~30 раз в сек
-        if (snapshotTimer >= 0.033) {
+                if (snapshotTimer >= 0.033) {
             BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-        // 8. Рассылка личной статистики игрокам (XP, Инвентарь) ~5 раз в сек
-        if (statsTimer >= 0.2) {
+                if (statsTimer >= 0.2) {
             for (auto& [id, obj] : gameScene.objects) {
                 if (obj->type == EntityType::PLAYER) {
                     auto p = std::dynamic_pointer_cast<Player>(obj);
@@ -4545,8 +4467,7 @@ public:
         : Construct(id, EntityType::WALL, pos, owner, space) {
         maxHealth = 400.0f;
         health = maxHealth;
-        color = GRAY; // Базовый цвет
-
+        color = GRAY; 
         body = cpSpaceAddBody(space, cpBodyNewStatic());
         cpBodySetPosition(body, ToCp(pos));
 
@@ -4557,9 +4478,7 @@ public:
         cpShapeSetUserData(shape, (void*)this);
     }
 
-    // Wall использует стандартный Upgrade из Construct, 
-    // но визуализацию мы поменяем в GameplayScene
-};
+        };
 class Turret : public Construct {
 public:
     float range = 400.0f;
@@ -4589,8 +4508,8 @@ public:
 class Mine : public Construct {
 public:
     float damage = 200.0f;
-    float triggerRadius = 35.0f; // Радиус срабатывания
-    float splashRadius = 100.0f; // Радиус взрыва (урон по площади)
+    float triggerRadius = 35.0f;
+    float splashRadius = 100.0f;
 
     Mine(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
         : Construct(id, EntityType::MINE, pos, owner, space) {
@@ -4601,17 +4520,15 @@ public:
         body = cpSpaceAddBody(space, cpBodyNewStatic());
         cpBodySetPosition(body, ToCp(pos));
 
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 15.0f, cpvzero));
-        cpShapeSetSensor(shape, true); // Мина - сенсор, через нее можно проходить
-        cpShapeSetCollisionType(shape, COLLISION_BULLET); // Чтобы реагировала
+                shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 15.0f, cpvzero));
+        cpShapeSetSensor(shape, true);
+        cpShapeSetCollisionType(shape, COLLISION_BULLET);
         cpShapeSetUserData(shape, (void*)this);
     }
 
     void Upgrade() override {
         Construct::Upgrade();
-        damage += 150.0f;      // Сильнее урон
-        splashRadius += 50.0f; // Больше радиус взрыва
-    }
+        damage += 100.0f;              splashRadius += 10.0f;     }
 };
 // engine\ECS\Enemy.h
 ﻿#pragma once
@@ -4635,24 +4552,43 @@ public:
         cpFloat mass = 20.0;
 
         switch (type) {
-        case EnemyType::BASIC: // Square
-            speed = 100.0f; maxHealth = 30.0f;
-            damage = 50.0f; // Было 40
-            xpReward = 20.0f; scrapReward = 1; radius = 20.0f; mass = 20.0f; break;
-        case EnemyType::FAST: // Triangle
-            speed = 190.0f; maxHealth = 20.0f;
-            damage = 40.0f; // Было 30
-            xpReward = 30.0f; scrapReward = 2; radius = 15.0f; mass = 10.0f; break;
-        case EnemyType::TANK: // Pentagon
-            speed = 60.0f; maxHealth = 250.0f; // HP подняли
-            damage = 100.0f; // Было 80
-            xpReward = 100.0f; scrapReward = 10; radius = 35.0f; mass = 100.0f; break;
+        case EnemyType::BASIC:             
+            speed = 100.0f; 
+            maxHealth = 30.0f;
+            damage = 50.0f;             
+            xpReward = 20.0f; 
+            scrapReward = 1;
+            radius = 20.0f;
+            mass = 20.0f; 
+            break;
+        case EnemyType::FAST:            
+            speed = 190.0f; 
+            maxHealth = 20.0f;
+            damage = 40.0f;             
+            xpReward = 30.0f; 
+            scrapReward = 2; 
+            radius = 15.0f; 
+            mass = 10.0f;
+            break;
+        case EnemyType::TANK:   
+            speed = 60.0f; 
+            maxHealth = 250.0f;             
+            damage = 100.0f;           
+            xpReward = 100.0f; 
+            scrapReward = 10; 
+            radius = 35.0f; 
+            mass = 100.0f;
+            break;
         case EnemyType::BOSS:
-            speed = 45.0f; maxHealth = 5000.0f;
-            damage = 300.0f; // Очень больно
-            xpReward = 1000.0f; scrapReward = 100; radius = 70.0f; mass = 1000.0f; break;
+            speed = 45.0f;
+            maxHealth = 5000.0f;
+            damage = 300.0f;        
+            xpReward = 1000.0f;
+            scrapReward = 100;
+            radius = 70.0f;
+            mass = 1000.0f;
+            break;
         }
-        // FIX: Инициализируем текущее здоровье после установки maxHealth
         health = maxHealth;
 
         cpFloat moment = cpMomentForCircle(mass, 0, radius, cpvzero);
@@ -4669,7 +4605,6 @@ public:
     void Update(float dt) override {
         if (health < maxHealth) health += maxHealth * 0.005f * dt;
 
-        // Искусственное трение
         cpVect currentVel = cpBodyGetVelocity(body);
         cpBodySetVelocity(body, cpvmult(currentVel, 0.90f));
 
@@ -4784,8 +4719,7 @@ public:
     const float BASE_SPEED = 220.0f;
     const float BASE_RELOAD = 0.5f;
 
-    std::string name = "Player"; // Никнейм
-
+    std::string name = "Player"; 
     uint32_t level = 1;
     float currentXp = 0.0f; float maxXp = 100.0f;
     uint32_t scrap = 0; uint32_t kills = 0;
@@ -4854,8 +4788,7 @@ public:
         if (curReload < 0.1f) curReload = 0.1f;
 
         curBulletSpeed = 600.0f + (lvl * 10.0f);
-        // FIX: Увеличено базовое время жизни с 0.5 до 1.5 сек
-        curBulletPen = 1.5f + (lvl * 0.05f);
+                curBulletPen = 1.5f + (lvl * 0.05f);
 
         if (health > maxHealth) health = maxHealth;
     }
@@ -5266,7 +5199,6 @@ public:
             if (clamped) { cpBodySetPosition(obj->body, pos); cpBodySetVelocity(obj->body, vel); }
         }
     }
-
     void HandleCollisionsAndDamage() {
         std::vector<std::shared_ptr<GameObject>> newArtifacts;
         double currentTime = GetTime();
@@ -5280,6 +5212,7 @@ public:
 
             Vector2 ePos = ToRay(cpBodyGetPosition(enemy->body));
 
+            // Определяем радиус врага для корректной коллизии
             float eRad = 20.0f;
             if (enemy->enemyType == EnemyType::TANK) eRad = 35.0f;
             if (enemy->enemyType == EnemyType::BOSS) eRad = 70.0f;
@@ -5292,38 +5225,49 @@ public:
                 float pRad = 25.0f;
                 if (pObj->type == EntityType::WALL) pRad = 35.0f;
 
-                // Проверка столкновения с запасом
+                // Проверка столкновения
                 if (Vector2Distance(ePos, pPos) < (eRad + pRad + 8.0f)) {
 
-                    // --- 1. Враг кусает Игрока/Стену ---
-                    // Увеличили урон врагов: множитель 2.0x
-                    // Теперь враг с уроном 50 наносит 100 урона в секунду (при 60 FPS)
+                    // --- Враг наносит урон Игроку/Структуре ---
                     float enemyDpsMult = 2.0f;
                     pObj->TakeDamage(enemy->damage * enemyDpsMult * 0.016f, currentTime);
 
-                    // --- 2. Ответный урон (Шипы) ---
-                    // Снизили ответный урон: множитель 0.2x (было 5.0x или 1.0x)
-                    // Теперь таранить врагов телом неэффективно, если нет спец. билда
-                    float ramDamage = 0.0f;
+                    // --- [FIX] ПРОВЕРКА СМЕРТИ ИГРОКА/СТРУКТУРЫ ---
+                    if (pObj->health <= 0) {
+                        if (pObj->type == EntityType::PLAYER) {
+                            // Логика смерти игрока
+                            auto pl = std::dynamic_pointer_cast<Player>(pObj);
+                            pl->Reset();
+                            // Респавн в случайном месте
+                            cpBodySetPosition(pl->body, cpv(rand() % (int)width, rand() % (int)height));
+                            pendingEvents.push_back({ 1, pPos, RED }); // Эффект смерти
+                        }
+                        else {
+                            // Логика уничтожения постройки
+                            pObj->destroyFlag = true;
+                            pendingEvents.push_back({ 1, pPos, GRAY }); // Эффект обломков
+                        }
+                    }
+                    // ----------------------------------------------
 
+                    // --- Ответный урон врагу (шипы) ---
+                    float ramDamage = 0.0f;
                     if (pObj->type == EntityType::PLAYER) {
                         auto p = std::dynamic_pointer_cast<Player>(pObj);
                         ramDamage = p->curBodyDmg * 0.2f * 0.016f;
                     }
                     else {
-                        // Стены наносят очень маленький урон при касании
                         ramDamage = 5.0f * 0.016f;
                     }
-
                     enemy->TakeDamage(ramDamage, currentTime);
 
-                    // Отталкивание (немного увеличили, чтобы враги не "слипались" с игроком)
+                    // Отталкивание
                     if (cpBodyGetType(pObj->body) != CP_BODY_TYPE_STATIC) {
                         Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
                         cpBodyApplyImpulseAtLocalPoint(pObj->body, ToCp(Vector2Scale(knockDir, 150.0f)), cpvzero);
                     }
 
-                    // Смерть врага от шипов
+                    // Смерть врага
                     if (enemy->health <= 0 && !enemy->destroyFlag) {
                         enemy->destroyFlag = true;
                         pendingEvents.push_back({ 1, ePos, RED });
@@ -5331,7 +5275,7 @@ public:
                             auto p = std::dynamic_pointer_cast<Player>(pObj);
                             p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
                         }
-                        // Дроп...
+                        // Дроп
                         int dropChance = (enemy->enemyType == EnemyType::BOSS) ? 100 : (enemy->enemyType == EnemyType::TANK ? 25 : 5);
                         if (rand() % 100 < dropChance) {
                             newArtifacts.push_back(std::make_shared<Artifact>(nextId++, ePos, space));
@@ -5354,7 +5298,15 @@ public:
             // Проверка триггера
             for (auto& [eid, eObj] : objects) {
                 if (eObj->type == EntityType::ENEMY) {
-                    if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body))) < mine->triggerRadius) {
+                    auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
+
+                    // [FIX] Учет радиуса врага при срабатывании мины
+                    float enemyRadius = 20.0f;
+                    if (enemy->enemyType == EnemyType::TANK) enemyRadius = 35.0f;
+                    if (enemy->enemyType == EnemyType::BOSS) enemyRadius = 70.0f;
+
+                    // Если расстояние < (радиус срабатывания + радиус врага), то БУМ
+                    if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body))) < (mine->triggerRadius + enemyRadius)) {
                         triggered = true;
                         break;
                     }
@@ -5363,26 +5315,25 @@ public:
 
             if (triggered) {
                 mine->destroyFlag = true;
-                // Визуальный эффект большого взрыва
-                pendingEvents.push_back({ 1, mPos, ORANGE });
-                // Можно добавить еще один event для круговой волны
-                pendingEvents.push_back({ 2, mPos, RED }); // Тип 2 (апгрейд) используем как эффект волны, но с красным цветом
+                pendingEvents.push_back({ 1, mPos, ORANGE }); // Взрыв
+                pendingEvents.push_back({ 2, mPos, RED });    // Волна (визуал)
 
-                // Наносим урон ВСЕМ врагам в радиусе
+                // [FIX] Нанесение урона по площади
                 for (auto& [eid, eObj] : objects) {
                     if (eObj->type == EntityType::ENEMY && !eObj->destroyFlag) {
                         float dist = Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body)));
+
+                        // Здесь используем splashRadius. Можно также учесть радиус врага, 
+                        // но для взрыва обычно берется центр.
                         if (dist <= mine->splashRadius) {
                             auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
-
-                            // Урон падает с расстоянием (опционально, сейчас полный урон)
                             enemy->TakeDamage(mine->damage, currentTime);
 
                             if (enemy->health <= 0) {
                                 enemy->destroyFlag = true;
                                 pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(enemy->body)), RED });
 
-                                // Начисляем владельцу мины
+                                // Награда владельцу
                                 if (objects.count(mine->ownerId) && objects[mine->ownerId]->type == EntityType::PLAYER) {
                                     auto p = std::dynamic_pointer_cast<Player>(objects[mine->ownerId]);
                                     p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
@@ -5393,12 +5344,6 @@ public:
                 }
             }
         }
-
-        // ... (Сбор артефактов и Пули оставляем как было в предыдущем ответе, они работают корректно) ...
-        // Только убедитесь, что код сбора артефактов и пуль остался на месте после вставки этого блока.
-
-        // --- COPY PASTE THE REST OF HandleCollisionsAndDamage FROM PREVIOUS ANSWER HERE ---
-        // (Для краткости я не дублирую код пуль, он не менялся, кроме того, что он должен идти после мин)
 
         // 3. Сбор артефактов
         for (auto& [aid, aObj] : objects) {
@@ -5418,19 +5363,23 @@ public:
             }
         }
 
-        // 4. Пули (стандартная логика)
+        // 4. Пули (стандартная логика, без изменений, кроме проверки владельца на существование)
         for (auto& [bid, bObj] : objects) {
             if (bObj->type != EntityType::BULLET) continue;
             if (bObj->destroyFlag) continue;
             auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
             Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
+
+            // Удаление пуль за границей
             if (bPos.x <= -50 || bPos.x >= width + 50 || bPos.y <= -50 || bPos.y >= height + 50) {
                 bullet->destroyFlag = true; continue;
             }
+
             for (auto& [tid, tObj] : objects) {
                 if (tid == bullet->ownerId || tObj->type == EntityType::BULLET || tObj->type == EntityType::ARTIFACT || tObj->type == EntityType::MINE) continue;
                 if (tObj->destroyFlag || tObj->health <= 0) continue;
 
+                // Friendly fire check
                 if (objects.count(bullet->ownerId)) {
                     if (objects[bullet->ownerId]->type == EntityType::PLAYER && (tObj->type == EntityType::TURRET || tObj->type == EntityType::WALL)) continue;
                 }
@@ -5446,36 +5395,51 @@ public:
 
                 if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(tObj->body))) <= targetRadius) {
                     bullet->destroyFlag = true;
-                    pendingEvents.push_back({ 0, bPos, WHITE });
+                    pendingEvents.push_back({ 0, bPos, WHITE }); // Hit effect
+
                     float dmg = 10.0f;
-                    if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
-                        auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]); dmg = p->curDamage;
+                    if (objects.count(bullet->ownerId)) {
+                        if (objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                            auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]); dmg = p->curDamage;
+                        }
+                        else if (objects[bullet->ownerId]->type == EntityType::TURRET) {
+                            auto t = std::dynamic_pointer_cast<Turret>(objects[bullet->ownerId]); dmg = t->damage;
+                        }
                     }
-                    else if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::TURRET) {
-                        auto t = std::dynamic_pointer_cast<Turret>(objects[bullet->ownerId]); dmg = t->damage;
-                    }
+
                     tObj->TakeDamage(dmg, currentTime);
+
                     if (tObj->health <= 0) {
                         Color debrisCol = GRAY; if (tObj->type == EntityType::ENEMY) debrisCol = RED;
                         pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(tObj->body)), debrisCol });
+
                         if (tObj->type == EntityType::PLAYER) {
                             auto p = std::dynamic_pointer_cast<Player>(tObj); p->Reset();
                             cpBodySetPosition(p->body, cpv(rand() % (int)width, rand() % (int)height));
                         }
                         else if (tObj->type == EntityType::ENEMY) {
                             tObj->destroyFlag = true; auto e = std::dynamic_pointer_cast<Enemy>(tObj);
-                            for (auto& [pid, pObj] : objects) if (pObj->type == EntityType::PLAYER) { auto p = std::dynamic_pointer_cast<Player>(pObj); p->AddXp(e->xpReward); p->scrap += e->scrapReward; }
-                            if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) { auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]); p->kills++; }
+
+                            // Награда всем игрокам или владельцу пули (здесь всем для простоты, или владельцу)
+                            if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                                auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                                p->AddXp(e->xpReward); p->scrap += e->scrapReward; p->kills++;
+                            }
+
                             int dropChance = (e->enemyType == EnemyType::BOSS) ? 100 : (e->enemyType == EnemyType::TANK ? 25 : 5);
                             if (rand() % 100 < dropChance) newArtifacts.push_back(std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(tObj->body)), space));
                         }
-                        else { tObj->destroyFlag = true; }
+                        else {
+                            // Уничтожение постройки
+                            tObj->destroyFlag = true;
+                        }
                     }
                 }
             }
         }
         for (auto& a : newArtifacts) objects[a->id] = a;
     }
+
 };
 // engine\Scenes\Scene.h
 ﻿#pragma once

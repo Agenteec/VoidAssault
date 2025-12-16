@@ -40,7 +40,8 @@ void ConfigManager::Save() {
 	{"favorites", jFav}
 	};
 	j["server"] = {
-		{"port", config.server.port}
+		{"port", config.server.port},
+		{"pvpDamageFactor", config.server.pvpDamageFactor}
 	};
 
 	std::ofstream file(configPath);
@@ -67,12 +68,14 @@ void ConfigManager::Load() {
 						s.name = elem.value("name", "Server");
 						s.ip = elem.value("ip", "127.0.0.1");
 						s.port = elem.value("port", 7777);
+
 						config.client.favoriteServers.push_back(s);
 					}
 				}
 			}
 			if (j.contains("server")) {
 				config.server.port = j["server"].value("port", 7777);
+				config.server.pvpDamageFactor = j["server"].value("pvpDamageFactor", 1.0f);
 			}
 		}
 		catch (...) { CreateDefaultConfig(); }

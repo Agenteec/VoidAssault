@@ -4,7 +4,7 @@
 #include <iostream>
 #include <chrono>
 #include <cmath>
-
+#include "Utils/ConfigManager.h"
 #if defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
 #endif
@@ -28,8 +28,11 @@ bool ServerHost::Start(int port) {
     if (running) return false;
 
 #if defined(__linux__) || defined(__APPLE__)
-        signal(SIGPIPE, SIG_IGN);
+    signal(SIGPIPE, SIG_IGN);
 #endif
+
+    gameScene.pvpFactor = ConfigManager::GetServer().pvpDamageFactor;
+    std::cout << "SERVER: PvP Damage Factor set to " << gameScene.pvpFactor << "\n";
 
     if (!netServer->start(port)) return false;
 
@@ -49,7 +52,7 @@ void ServerHost::ServerLoop() {
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     double accumulator = 0.0;
-    const double dt = 1.0 / 60.0; 
+    const double dt = 1.0 / 60.0;
     double snapshotTimer = 0.0;
     double statsTimer = 0.0;
 
@@ -62,17 +65,18 @@ void ServerHost::ServerLoop() {
         double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-        if (frameTime > 0.25) frameTime = 0.25; 
+                if (frameTime > 0.25) frameTime = 0.25;
+
                 if (netServer->numClients() == 0) {
             bool hasEntities = false;
             for (auto& pair : gameScene.objects) {
-                                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
+                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
                     hasEntities = true; break;
                 }
             }
 
             if (waveCount > 1 || hasEntities) {
-                                auto it = gameScene.objects.begin();
+                auto it = gameScene.objects.begin();
                 while (it != gameScene.objects.end()) {
                     if (it->second->type == EntityType::ENEMY ||
                         it->second->type == EntityType::BULLET ||
@@ -87,8 +91,7 @@ void ServerHost::ServerLoop() {
                 waveTimer = 0;
                 timeToNextWave = 5.0;
             }
-
-                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
 
                         auto msgs = netServer->poll();
             for (auto& msg : msgs) {
@@ -106,19 +109,20 @@ void ServerHost::ServerLoop() {
             continue;
         }
 
-                accumulator += frameTime;
+        accumulator += frameTime;
         snapshotTimer += frameTime;
         statsTimer += frameTime;
         waveTimer += frameTime;
 
-                if (waveTimer >= timeToNextWave) {
+        if (waveTimer >= timeToNextWave) {
             waveTimer = 0.0;
             timeToNextWave = 20.0 + (waveCount * 2.0);
 
             int currentEnemies = 0;
             for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
 
-            if (currentEnemies < 120) {                 int enemiesToSpawn = 5 + (waveCount * 2);
+            if (currentEnemies < 120) {
+                int enemiesToSpawn = 5 + (waveCount * 2);
                 if (enemiesToSpawn > 60) enemiesToSpawn = 60;
 
                 std::cout << "SERVER: Spawning Wave " << waveCount << " (" << enemiesToSpawn << " enemies)\n";
@@ -126,7 +130,7 @@ void ServerHost::ServerLoop() {
                     gameScene.SpawnEnemy();
                 }
 
-                                if (waveCount % 5 == 0) {
+                if (waveCount % 5 == 0) {
                     gameScene.SpawnEnemy(EnemyType::BOSS);
                 }
 
@@ -134,7 +138,7 @@ void ServerHost::ServerLoop() {
             }
         }
 
-                auto msgs = netServer->poll();
+        auto msgs = netServer->poll();
         for (auto& msg : msgs) {
             uint32_t peerId = msg->peerId();
 
@@ -207,12 +211,15 @@ void ServerHost::ServerLoop() {
             }
         }
 
-                while (accumulator >= dt) {
+                        int maxPhysicsSteps = 5;
+        int steps = 0;
+        while (accumulator >= dt && steps < maxPhysicsSteps) {
             gameScene.Update((float)dt);
             accumulator -= dt;
+            steps++;
         }
-
-                if (!gameScene.pendingEvents.empty()) {
+        if (accumulator > dt) accumulator = 0.0; 
+        if (!gameScene.pendingEvents.empty()) {
             for (const auto& evt : gameScene.pendingEvents) {
                 Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                 ser.value1b(GamePacket::EVENT);
@@ -223,13 +230,11 @@ void ServerHost::ServerLoop() {
             gameScene.pendingEvents.clear();
         }
 
-                if (snapshotTimer >= 0.033) {
-            BroadcastSnapshot();
+        if (snapshotTimer >= 0.033) {             BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-                if (statsTimer >= 0.2) {
-            for (auto& [id, obj] : gameScene.objects) {
+        if (statsTimer >= 0.2) {             for (auto& [id, obj] : gameScene.objects) {
                 if (obj->type == EntityType::PLAYER) {
                     auto p = std::dynamic_pointer_cast<Player>(obj);
 

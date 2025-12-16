@@ -17,7 +17,7 @@ public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
     std::vector<EventPacket> pendingEvents;
-
+    float pvpFactor = 1.0f;
     uint32_t nextId = 1000;
     float width = 4000;
     float height = 4000;
@@ -74,23 +74,20 @@ public:
         case AdminCmdType::KILL_ALL_ENEMIES: {
             for (auto& [id, obj] : objects) {
                 if (obj->type == EntityType::ENEMY) {
-                    obj->TakeDamage(999999.0f, 0); // Гарантированное убийство
-                }
+                    obj->TakeDamage(999999.0f, 0);                 }
             }
         } break;
         case AdminCmdType::SPAWN_BOSS:
             SpawnEnemy(EnemyType::BOSS);
             break;
 
-            // NEW: Очистка построек
-        case AdminCmdType::CLEAR_BUILDINGS: {
+                    case AdminCmdType::CLEAR_BUILDINGS: {
             for (auto& [id, obj] : objects) {
                 if (obj->type == EntityType::WALL ||
                     obj->type == EntityType::TURRET ||
                     obj->type == EntityType::MINE) {
                     obj->destroyFlag = true;
-                    // Создаем эффект исчезновения
-                    if (obj->body) {
+                                        if (obj->body) {
                         Vector2 pos = ToRay(cpBodyGetPosition(obj->body));
                         pendingEvents.push_back({ 1, pos, GRAY });
                     }
@@ -98,25 +95,19 @@ public:
             }
         } break;
 
-                                          // NEW: Полный сброс сервера
-        case AdminCmdType::RESET_SERVER: {
-            // Удаляем всех, кроме игроков
-            auto it = objects.begin();
+                                                  case AdminCmdType::RESET_SERVER: {
+                        auto it = objects.begin();
             while (it != objects.end()) {
                 if (it->second->type != EntityType::PLAYER) {
-                    // Эффект исчезновения для всего
-                    if (it->second->body) {
-                        // Чтобы не спамить пакетами, можно не добавлять эффекты при полном сбросе
-                    }
+                                        if (it->second->body) {
+                                            }
                     it = objects.erase(it);
                 }
                 else {
-                    // Сброс игроков
-                    auto pl = std::dynamic_pointer_cast<Player>(it->second);
+                                        auto pl = std::dynamic_pointer_cast<Player>(it->second);
                     if (pl) {
                         pl->Reset();
-                        // Телепорт в случайную точку около центра
-                        float rx = (width / 2.0f) + (float)(rand() % 400 - 200);
+                                                float rx = (width / 2.0f) + (float)(rand() % 400 - 200);
                         float ry = (height / 2.0f) + (float)(rand() % 400 - 200);
                         cpBodySetPosition(pl->body, cpv(rx, ry));
                         cpBodySetVelocity(pl->body, cpvzero);
@@ -124,9 +115,7 @@ public:
                     ++it;
                 }
             }
-            // Сбрасываем ID генератор, чтобы не улетал в бесконечность (безопасно)
-            // Но лучше оставить как есть, чтобы не было коллизий ID у старых пакетов
-        } break;
+                                } break;
         }
     }
 
@@ -136,20 +125,16 @@ public:
         if (!p) return;
 
         Vector2 pos = SnapToGrid(rawPos);
-        // Проверка границ карты
-        if (pos.x < GRID_SIZE || pos.x > width - GRID_SIZE || pos.y < GRID_SIZE || pos.y > height - GRID_SIZE) return;
-        // Проверка дистанции стройки
-        if (Vector2Distance(ToRay(cpBodyGetPosition(p->body)), pos) > 400.0f) return;
+                if (pos.x < GRID_SIZE || pos.x > width - GRID_SIZE || pos.y < GRID_SIZE || pos.y > height - GRID_SIZE) return;
+                if (Vector2Distance(ToRay(cpBodyGetPosition(p->body)), pos) > 400.0f) return;
 
-        // Проверка наложения на другие постройки
-        for (auto& [id, obj] : objects) {
+                for (auto& [id, obj] : objects) {
             if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
                 if (Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), pos) < (GRID_SIZE / 2.0f)) return;
             }
         }
 
-        // Лимит турелей
-        if (buildType == ActionType::BUILD_TURRET) {
+                if (buildType == ActionType::BUILD_TURRET) {
             int myTurrets = 0;
             for (auto& [id, obj] : objects) {
                 if (obj->type == EntityType::TURRET) {
@@ -186,8 +171,7 @@ public:
         for (auto& [id, obj] : objects) {
             if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
                 Vector2 objPos = ToRay(cpBodyGetPosition(obj->body));
-                // Радиус клика для апгрейда
-                if (Vector2Distance(rawPos, objPos) < 30.0f) {
+                                if (Vector2Distance(rawPos, objPos) < 30.0f) {
                     auto c = std::dynamic_pointer_cast<Construct>(obj);
                     int cost = 20 * c->level;
                     if (p->scrap >= cost) {
@@ -206,8 +190,7 @@ public:
         if (objects.count(id)) objects.erase(id);
         auto p = std::make_shared<Player>(id, startPos, space);
         p->Reset();
-        if (objects.size() == 0) p->isAdmin = true; // Первый игрок - админ
-        objects[id] = p;
+        if (objects.size() == 0) p->isAdmin = true;         objects[id] = p;
         return p;
     }
 
@@ -216,8 +199,7 @@ public:
         int side = rand() % 4;
         float offset = 50.0f;
 
-        // Спавн за пределами экрана
-        if (side == 0) { spawnX = -offset; spawnY = (float)(rand() % (int)height); }
+                if (side == 0) { spawnX = -offset; spawnY = (float)(rand() % (int)height); }
         else if (side == 1) { spawnX = width + offset; spawnY = (float)(rand() % (int)height); }
         else if (side == 2) { spawnX = (float)(rand() % (int)width); spawnY = -offset; }
         else { spawnX = (float)(rand() % (int)width); spawnY = height + offset; }
@@ -250,8 +232,7 @@ public:
             auto& obj = it->second;
             obj->Update(dt);
 
-            // Логика стрельбы игрока
-            if (obj->type == EntityType::PLAYER) {
+                        if (obj->type == EntityType::PLAYER) {
                 auto p = std::dynamic_pointer_cast<Player>(obj);
                 if (p && p->spawnBulletSignal) {
                     p->spawnBulletSignal = false;
@@ -262,22 +243,19 @@ public:
                     b->lifeTime = p->curBulletPen;
                     float spd = p->curBulletSpeed;
 
-                    // Добавляем инерцию от движения игрока
-                    cpBodySetVelocity(b->body, cpvadd(cpvmult(ToCp(dir), spd), cpvmult(cpBodyGetVelocity(p->body), 0.2f)));
+                                        cpBodySetVelocity(b->body, cpvadd(cpvmult(ToCp(dir), spd), cpvmult(cpBodyGetVelocity(p->body), 0.2f)));
                     newBullets.push_back(b);
                 }
             }
 
-            // Логика стрельбы турели
-            if (obj->type == EntityType::TURRET) {
+                        if (obj->type == EntityType::TURRET) {
                 auto t = std::dynamic_pointer_cast<Turret>(obj);
                 if (t->cooldown <= 0) {
                     float minDist = t->range;
                     std::shared_ptr<GameObject> target = nullptr;
                     Vector2 tPos = ToRay(cpBodyGetPosition(t->body));
 
-                    // Поиск ближайшего врага
-                    for (auto& [eid, eObj] : objects) {
+                                        for (auto& [eid, eObj] : objects) {
                         if (eObj->type == EntityType::ENEMY) {
                             float d = Vector2Distance(tPos, ToRay(cpBodyGetPosition(eObj->body)));
                             if (d < minDist) { minDist = d; target = eObj; }
@@ -294,8 +272,7 @@ public:
                 }
             }
 
-            // Логика мин
-            if (obj->type == EntityType::MINE) {
+                        if (obj->type == EntityType::MINE) {
                 auto m = std::dynamic_pointer_cast<Mine>(obj);
                 Vector2 mPos = ToRay(cpBodyGetPosition(m->body));
                 for (auto& [eid, eObj] : objects) {
@@ -310,8 +287,7 @@ public:
                 }
             }
 
-            // Логика движения врагов
-            if (obj->type == EntityType::ENEMY) {
+                        if (obj->type == EntityType::ENEMY) {
                 auto enemy = std::dynamic_pointer_cast<Enemy>(obj);
                 float minDist = 999999.0f;
                 Vector2 targetPos = { width / 2, height / 2 };
@@ -336,8 +312,7 @@ public:
 
     void EnforceMapBoundaries() {
         for (auto& [id, obj] : objects) {
-            // Пули могут вылетать (чтобы удаляться), статика не двигается
-            if (obj->type == EntityType::BULLET || !obj->body || cpBodyGetType(obj->body) == CP_BODY_TYPE_STATIC) continue;
+                        if (obj->type == EntityType::BULLET || !obj->body || cpBodyGetType(obj->body) == CP_BODY_TYPE_STATIC) continue;
 
             cpVect pos = cpBodyGetPosition(obj->body);
             cpVect vel = cpBodyGetVelocity(obj->body);
@@ -356,141 +331,92 @@ public:
         std::vector<std::shared_ptr<GameObject>> newArtifacts;
         double currentTime = GetTime();
 
-        // 1. Взаимодействие ВРАГ <-> ИГРОК/ПОСТРОЙКА (Таран)
-        for (auto& [eid, eObj] : objects) {
-            if (eObj->type != EntityType::ENEMY) continue;
-            auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
+                std::vector<std::shared_ptr<Enemy>> enemies;
+        std::vector<std::shared_ptr<Player>> players;
+        std::vector<std::shared_ptr<Bullet>> bullets;
+        std::vector<std::shared_ptr<Construct>> structures;
+        std::vector<std::shared_ptr<Mine>> mines;
+        std::vector<std::shared_ptr<Artifact>> artifacts;
 
+        enemies.reserve(objects.size());
+        bullets.reserve(objects.size());
+
+        for (auto& [id, obj] : objects) {
+            if (obj->destroyFlag) continue;
+            switch (obj->type) {
+            case EntityType::ENEMY: enemies.push_back(std::dynamic_pointer_cast<Enemy>(obj)); break;
+            case EntityType::PLAYER: players.push_back(std::dynamic_pointer_cast<Player>(obj)); break;
+            case EntityType::BULLET: bullets.push_back(std::dynamic_pointer_cast<Bullet>(obj)); break;
+            case EntityType::WALL:
+            case EntityType::TURRET: structures.push_back(std::dynamic_pointer_cast<Construct>(obj)); break;
+            case EntityType::MINE: mines.push_back(std::dynamic_pointer_cast<Mine>(obj)); break;
+            case EntityType::ARTIFACT: artifacts.push_back(std::dynamic_pointer_cast<Artifact>(obj)); break;
+            }
+        }
+
+                for (auto& enemy : enemies) {
             if (enemy->destroyFlag || enemy->health <= 0) continue;
-
             Vector2 ePos = ToRay(cpBodyGetPosition(enemy->body));
+            float eRad = (enemy->enemyType == EnemyType::BOSS) ? 70.0f : ((enemy->enemyType == EnemyType::TANK) ? 35.0f : 20.0f);
 
-            // Определяем радиус врага для корректной коллизии
-            float eRad = 20.0f;
-            if (enemy->enemyType == EnemyType::TANK) eRad = 35.0f;
-            if (enemy->enemyType == EnemyType::BOSS) eRad = 70.0f;
-
-            for (auto& [pid, pObj] : objects) {
-                if (pObj->type != EntityType::PLAYER && pObj->type != EntityType::WALL && pObj->type != EntityType::TURRET) continue;
+            for (auto& pObj : players) {
                 if (pObj->destroyFlag || pObj->health <= 0) continue;
-
                 Vector2 pPos = ToRay(cpBodyGetPosition(pObj->body));
-                float pRad = 25.0f;
-                if (pObj->type == EntityType::WALL) pRad = 35.0f;
 
-                // Проверка столкновения
-                if (Vector2Distance(ePos, pPos) < (eRad + pRad + 8.0f)) {
-
-                    // --- Враг наносит урон Игроку/Структуре ---
+                if (Vector2Distance(ePos, pPos) < (eRad + 25.0f + 8.0f)) {
                     float enemyDpsMult = 2.0f;
                     pObj->TakeDamage(enemy->damage * enemyDpsMult * 0.016f, currentTime);
 
-                    // --- [FIX] ПРОВЕРКА СМЕРТИ ИГРОКА/СТРУКТУРЫ ---
                     if (pObj->health <= 0) {
-                        if (pObj->type == EntityType::PLAYER) {
-                            // Логика смерти игрока
-                            auto pl = std::dynamic_pointer_cast<Player>(pObj);
-                            pl->Reset();
-                            // Респавн в случайном месте
-                            cpBodySetPosition(pl->body, cpv(rand() % (int)width, rand() % (int)height));
-                            pendingEvents.push_back({ 1, pPos, RED }); // Эффект смерти
-                        }
-                        else {
-                            // Логика уничтожения постройки
-                            pObj->destroyFlag = true;
-                            pendingEvents.push_back({ 1, pPos, GRAY }); // Эффект обломков
-                        }
+                        pObj->Reset();
+                        cpBodySetPosition(pObj->body, cpv(rand() % (int)width, rand() % (int)height));
+                        pendingEvents.push_back({ 1, pPos, RED });
                     }
-                    // ----------------------------------------------
+                    enemy->TakeDamage(pObj->curBodyDmg * 0.2f * 0.016f, currentTime);
+                    Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
+                    cpBodyApplyImpulseAtLocalPoint(pObj->body, ToCp(Vector2Scale(knockDir, 150.0f)), cpvzero);
+                }
+            }
 
-                    // --- Ответный урон врагу (шипы) ---
-                    float ramDamage = 0.0f;
-                    if (pObj->type == EntityType::PLAYER) {
-                        auto p = std::dynamic_pointer_cast<Player>(pObj);
-                        ramDamage = p->curBodyDmg * 0.2f * 0.016f;
+            for (auto& str : structures) {
+                if (str->destroyFlag || str->health <= 0) continue;
+                Vector2 sPos = ToRay(cpBodyGetPosition(str->body));
+                float sRad = (str->type == EntityType::WALL) ? 35.0f : 25.0f;
+                if (Vector2Distance(ePos, sPos) < (eRad + sRad + 8.0f)) {
+                    str->TakeDamage(enemy->damage * 2.0f * 0.016f, currentTime);
+                    if (str->health <= 0) {
+                        str->destroyFlag = true;
+                        pendingEvents.push_back({ 1, sPos, GRAY });
                     }
-                    else {
-                        ramDamage = 5.0f * 0.016f;
-                    }
-                    enemy->TakeDamage(ramDamage, currentTime);
-
-                    // Отталкивание
-                    if (cpBodyGetType(pObj->body) != CP_BODY_TYPE_STATIC) {
-                        Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
-                        cpBodyApplyImpulseAtLocalPoint(pObj->body, ToCp(Vector2Scale(knockDir, 150.0f)), cpvzero);
-                    }
-
-                    // Смерть врага
-                    if (enemy->health <= 0 && !enemy->destroyFlag) {
-                        enemy->destroyFlag = true;
-                        pendingEvents.push_back({ 1, ePos, RED });
-                        if (pObj->type == EntityType::PLAYER) {
-                            auto p = std::dynamic_pointer_cast<Player>(pObj);
-                            p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
-                        }
-                        // Дроп
-                        int dropChance = (enemy->enemyType == EnemyType::BOSS) ? 100 : (enemy->enemyType == EnemyType::TANK ? 25 : 5);
-                        if (rand() % 100 < dropChance) {
-                            newArtifacts.push_back(std::make_shared<Artifact>(nextId++, ePos, space));
-                        }
-                        break;
-                    }
+                    enemy->TakeDamage(5.0f * 0.016f, currentTime);
                 }
             }
         }
 
-        // 2. МИНЫ (Splash Damage)
-        for (auto& [mid, mObj] : objects) {
-            if (mObj->type != EntityType::MINE) continue;
-            if (mObj->destroyFlag) continue;
-
-            auto mine = std::dynamic_pointer_cast<Mine>(mObj);
+                for (auto& mine : mines) {
+            if (mine->destroyFlag) continue;
             Vector2 mPos = ToRay(cpBodyGetPosition(mine->body));
             bool triggered = false;
-
-            // Проверка триггера
-            for (auto& [eid, eObj] : objects) {
-                if (eObj->type == EntityType::ENEMY) {
-                    auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
-
-                    // [FIX] Учет радиуса врага при срабатывании мины
-                    float enemyRadius = 20.0f;
-                    if (enemy->enemyType == EnemyType::TANK) enemyRadius = 35.0f;
-                    if (enemy->enemyType == EnemyType::BOSS) enemyRadius = 70.0f;
-
-                    // Если расстояние < (радиус срабатывания + радиус врага), то БУМ
-                    if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body))) < (mine->triggerRadius + enemyRadius)) {
-                        triggered = true;
-                        break;
-                    }
+            for (auto& enemy : enemies) {
+                float eRad = (enemy->enemyType == EnemyType::TANK) ? 35.0f : 20.0f;
+                if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(enemy->body))) < (mine->triggerRadius + eRad)) {
+                    triggered = true; break;
                 }
             }
-
             if (triggered) {
                 mine->destroyFlag = true;
-                pendingEvents.push_back({ 1, mPos, ORANGE }); // Взрыв
-                pendingEvents.push_back({ 2, mPos, RED });    // Волна (визуал)
-
-                // [FIX] Нанесение урона по площади
-                for (auto& [eid, eObj] : objects) {
-                    if (eObj->type == EntityType::ENEMY && !eObj->destroyFlag) {
-                        float dist = Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body)));
-
-                        // Здесь используем splashRadius. Можно также учесть радиус врага, 
-                        // но для взрыва обычно берется центр.
-                        if (dist <= mine->splashRadius) {
-                            auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
-                            enemy->TakeDamage(mine->damage, currentTime);
-
-                            if (enemy->health <= 0) {
-                                enemy->destroyFlag = true;
-                                pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(enemy->body)), RED });
-
-                                // Награда владельцу
-                                if (objects.count(mine->ownerId) && objects[mine->ownerId]->type == EntityType::PLAYER) {
-                                    auto p = std::dynamic_pointer_cast<Player>(objects[mine->ownerId]);
-                                    p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
-                                }
+                pendingEvents.push_back({ 1, mPos, ORANGE });
+                pendingEvents.push_back({ 2, mPos, RED });
+                for (auto& enemy : enemies) {
+                    if (enemy->destroyFlag) continue;
+                    if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(enemy->body))) <= mine->splashRadius) {
+                        enemy->TakeDamage(mine->damage, currentTime);
+                        if (enemy->health <= 0) {
+                            enemy->destroyFlag = true;
+                            pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(enemy->body)), RED });
+                            if (objects.count(mine->ownerId) && objects[mine->ownerId]->type == EntityType::PLAYER) {
+                                auto p = std::dynamic_pointer_cast<Player>(objects[mine->ownerId]);
+                                p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
                             }
                         }
                     }
@@ -498,98 +424,107 @@ public:
             }
         }
 
-        // 3. Сбор артефактов
-        for (auto& [aid, aObj] : objects) {
-            if (aObj->type != EntityType::ARTIFACT) continue;
-            if (aObj->destroyFlag) continue;
-            Vector2 aPos = ToRay(cpBodyGetPosition(aObj->body));
-            for (auto& [pid, pObj] : objects) {
-                if (pObj->type != EntityType::PLAYER) continue;
-                auto p = std::dynamic_pointer_cast<Player>(pObj);
+                for (auto& art : artifacts) {
+            if (art->destroyFlag) continue;
+            Vector2 aPos = ToRay(cpBodyGetPosition(art->body));
+            for (auto& p : players) {
                 if (Vector2Distance(aPos, ToRay(cpBodyGetPosition(p->body))) < 40.0f) {
-                    auto art = std::dynamic_pointer_cast<Artifact>(aObj);
                     if (p->AddItemToInventory(art->bonusType)) {
-                        aObj->destroyFlag = true;
+                        art->destroyFlag = true;
                         pendingEvents.push_back({ 2, aPos, GOLD });
                     }
                 }
             }
         }
 
-        // 4. Пули (стандартная логика, без изменений, кроме проверки владельца на существование)
-        for (auto& [bid, bObj] : objects) {
-            if (bObj->type != EntityType::BULLET) continue;
-            if (bObj->destroyFlag) continue;
-            auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
+                for (auto& bullet : bullets) {
+            if (bullet->destroyFlag) continue;
             Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
 
-            // Удаление пуль за границей
             if (bPos.x <= -50 || bPos.x >= width + 50 || bPos.y <= -50 || bPos.y >= height + 50) {
                 bullet->destroyFlag = true; continue;
             }
 
-            for (auto& [tid, tObj] : objects) {
-                if (tid == bullet->ownerId || tObj->type == EntityType::BULLET || tObj->type == EntityType::ARTIFACT || tObj->type == EntityType::MINE) continue;
-                if (tObj->destroyFlag || tObj->health <= 0) continue;
+            bool hit = false;
+            float dmg = 10.0f;
 
-                // Friendly fire check
-                if (objects.count(bullet->ownerId)) {
-                    if (objects[bullet->ownerId]->type == EntityType::PLAYER && (tObj->type == EntityType::TURRET || tObj->type == EntityType::WALL)) continue;
-                }
+                        if (objects.count(bullet->ownerId)) {
+                auto owner = objects[bullet->ownerId];
+                if (owner->type == EntityType::PLAYER) dmg = std::dynamic_pointer_cast<Player>(owner)->curDamage;
+                else if (owner->type == EntityType::TURRET) dmg = std::dynamic_pointer_cast<Turret>(owner)->damage;
+            }
 
-                float targetRadius = 25.0f;
-                if (tObj->type == EntityType::WALL) targetRadius = 35.0f;
-                else if (tObj->type == EntityType::ENEMY) {
-                    auto e = std::dynamic_pointer_cast<Enemy>(tObj);
-                    if (e->enemyType == EnemyType::BOSS) targetRadius = 75.0f;
-                    else if (e->enemyType == EnemyType::TANK) targetRadius = 40.0f;
-                    else targetRadius = 30.0f;
-                }
+                        for (auto& enemy : enemies) {
+                if (enemy->destroyFlag || enemy->health <= 0) continue;
+                float targetRadius = (enemy->enemyType == EnemyType::BOSS) ? 75.0f : ((enemy->enemyType == EnemyType::TANK) ? 40.0f : 30.0f);
 
-                if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(tObj->body))) <= targetRadius) {
-                    bullet->destroyFlag = true;
-                    pendingEvents.push_back({ 0, bPos, WHITE }); // Hit effect
-
-                    float dmg = 10.0f;
-                    if (objects.count(bullet->ownerId)) {
-                        if (objects[bullet->ownerId]->type == EntityType::PLAYER) {
-                            auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]); dmg = p->curDamage;
+                if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(enemy->body))) <= targetRadius) {
+                    hit = true;
+                    enemy->TakeDamage(dmg, currentTime);
+                    if (enemy->health <= 0) {
+                        enemy->destroyFlag = true;
+                        pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(enemy->body)), RED });
+                        if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                            auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                            p->AddXp(enemy->xpReward); p->scrap += enemy->scrapReward; p->kills++;
                         }
-                        else if (objects[bullet->ownerId]->type == EntityType::TURRET) {
-                            auto t = std::dynamic_pointer_cast<Turret>(objects[bullet->ownerId]); dmg = t->damage;
-                        }
+                        int dropChance = (enemy->enemyType == EnemyType::BOSS) ? 100 : (enemy->enemyType == EnemyType::TANK ? 25 : 5);
+                        if (rand() % 100 < dropChance) newArtifacts.push_back(std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(enemy->body)), space));
                     }
+                    break;
+                }
+            }
+            if (hit) { bullet->destroyFlag = true; pendingEvents.push_back({ 0, bPos, WHITE }); continue; }
 
-                    tObj->TakeDamage(dmg, currentTime);
+                        if (pvpFactor > 0.001f) {                 for (auto& p : players) {
+                                        if (p->id == bullet->ownerId) continue;
+                    if (p->destroyFlag || p->health <= 0) continue;
 
-                    if (tObj->health <= 0) {
-                        Color debrisCol = GRAY; if (tObj->type == EntityType::ENEMY) debrisCol = RED;
-                        pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(tObj->body)), debrisCol });
+                                                            if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type != EntityType::PLAYER) continue;
 
-                        if (tObj->type == EntityType::PLAYER) {
-                            auto p = std::dynamic_pointer_cast<Player>(tObj); p->Reset();
+                    float pRad = 25.0f;
+                    if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(p->body))) <= pRad) {
+                        hit = true;
+
+                                                float pvpDmg = dmg * pvpFactor;
+
+                        p->TakeDamage(pvpDmg, currentTime);
+                        pendingEvents.push_back({ 0, bPos, RED }); 
+                        if (p->health <= 0) {
+                            p->Reset();
                             cpBodySetPosition(p->body, cpv(rand() % (int)width, rand() % (int)height));
-                        }
-                        else if (tObj->type == EntityType::ENEMY) {
-                            tObj->destroyFlag = true; auto e = std::dynamic_pointer_cast<Enemy>(tObj);
+                            pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(p->body)), RED });
 
-                            // Награда всем игрокам или владельцу пули (здесь всем для простоты, или владельцу)
-                            if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
-                                auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
-                                p->AddXp(e->xpReward); p->scrap += e->scrapReward; p->kills++;
-                            }
-
-                            int dropChance = (e->enemyType == EnemyType::BOSS) ? 100 : (e->enemyType == EnemyType::TANK ? 25 : 5);
-                            if (rand() % 100 < dropChance) newArtifacts.push_back(std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(tObj->body)), space));
+                                                        if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                                auto killer = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                                killer->kills++;
+                                killer->scrap += p->level * 10;                             }
                         }
-                        else {
-                            // Уничтожение постройки
-                            tObj->destroyFlag = true;
-                        }
+                        break;
                     }
                 }
             }
+            if (hit) { bullet->destroyFlag = true; continue; }
+
+                                    for (auto& str : structures) {
+                if (str->destroyFlag) continue;
+                if (str->ownerId == bullet->ownerId) continue; 
+                                if (pvpFactor <= 0.001f && objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) continue;
+
+                float sRad = (str->type == EntityType::WALL) ? 35.0f : 25.0f;
+                if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(str->body))) <= sRad) {
+                    hit = true;
+                                        str->TakeDamage(dmg, currentTime);
+                    if (str->health <= 0) {
+                        str->destroyFlag = true;
+                        pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(str->body)), GRAY });
+                    }
+                    break;
+                }
+            }
+            if (hit) { bullet->destroyFlag = true; pendingEvents.push_back({ 0, bPos, WHITE }); continue; }
         }
+
         for (auto& a : newArtifacts) objects[a->id] = a;
     }
 

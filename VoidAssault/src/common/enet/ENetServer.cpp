@@ -155,7 +155,7 @@ void ENetServer::sendMessage(uint32_t id, DeliveryType type, Message::Shared msg
     ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
 
     enet_peer_send(client, channel, p);
-    enet_host_flush(host_);
+    //enet_host_flush(host_);
 }
 
 void ENetServer::send(uint32_t id, DeliveryType type, StreamBuffer::Shared stream) const
@@ -176,7 +176,7 @@ void ENetServer::broadcastMessage(DeliveryType type, Message::Shared msg) const
     ENetPacket* p = enet_packet_create(&data[0], data.size(), flags);
 
     enet_host_broadcast(host_, channel, p);
-    enet_host_flush(host_);
+    //enet_host_flush(host_);
 }
 
 void ENetServer::broadcast(DeliveryType type, StreamBuffer::Shared stream) const

@@ -12,6 +12,7 @@ struct SavedServer {
 	std::string name;
 	std::string ip;
 	int port;
+	
 };
 struct ClientConfig {
 	std::string playerName = "Player";
@@ -32,6 +33,7 @@ struct ServerConfig {
 	int port = 7777;
 	int maxPlayers = 8;
 	int tickRate = 60;
+	float pvpDamageFactor = 1.0f;
 };
 struct GameConfig {
 	ClientConfig client;
