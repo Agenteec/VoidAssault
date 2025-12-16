@@ -31,6 +31,8 @@ if(WIN32)
 endif()
 if(UNIX AND NOT APPLE AND NOT ANDROID)
     add_compile_options(-fno-fast-math)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+    set(CMAKE_INSTALL_RPATH "$ORIGIN")
 endif()
 
 if(ANDROID)

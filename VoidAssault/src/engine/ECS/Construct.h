@@ -27,12 +27,11 @@ public:
 
 class Wall : public Construct {
 public:
-        Wall(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
+    Wall(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
         : Construct(id, EntityType::WALL, pos, owner, space) {
         maxHealth = 400.0f;
         health = maxHealth;
-        color = GRAY;
-
+        color = GRAY; 
         body = cpSpaceAddBody(space, cpBodyNewStatic());
         cpBodySetPosition(body, ToCp(pos));
 
@@ -42,8 +41,8 @@ public:
         cpShapeSetCollisionType(shape, COLLISION_WALL);
         cpShapeSetUserData(shape, (void*)this);
     }
-};
 
+        };
 class Turret : public Construct {
 public:
     float range = 400.0f;
@@ -70,10 +69,11 @@ public:
         if (cooldown > 0) cooldown -= dt;
     }
 };
-
 class Mine : public Construct {
 public:
     float damage = 200.0f;
+    float triggerRadius = 35.0f;
+    float splashRadius = 100.0f;
 
     Mine(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
         : Construct(id, EntityType::MINE, pos, owner, space) {
@@ -84,7 +84,7 @@ public:
         body = cpSpaceAddBody(space, cpBodyNewStatic());
         cpBodySetPosition(body, ToCp(pos));
 
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 15.0f, cpvzero));
+                shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 15.0f, cpvzero));
         cpShapeSetSensor(shape, true);
         cpShapeSetCollisionType(shape, COLLISION_BULLET);
         cpShapeSetUserData(shape, (void*)this);
@@ -92,6 +92,5 @@ public:
 
     void Upgrade() override {
         Construct::Upgrade();
-        damage += 100.0f;
-    }
+        damage += 100.0f;              splashRadius += 10.0f;     }
 };

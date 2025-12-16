@@ -3,17 +3,11 @@
 #include "raylib.h"
 #include <cstdint>
 #include <vector>
+#include <string>
 
 namespace GamePacket {
     enum Type : uint8_t {
-        INPUT = 1,
-        INIT,
-        SNAPSHOT,
-        EVENT,
-        STATS,
-        ACTION,
-                ADMIN_CMD = 8
-    };
+        JOIN = 0,               INPUT,                  INIT,                   SNAPSHOT,               EVENT,                  STATS,                  ACTION,                 ADMIN_CMD           };
 }
 
 namespace ActionType {
@@ -31,19 +25,48 @@ namespace AdminCmdType {
         GIVE_SCRAP,
         GIVE_XP,
         KILL_ALL_ENEMIES,
-        SPAWN_BOSS
+        SPAWN_BOSS,
+        CLEAR_BUILDINGS,         RESET_SERVER         };
+}
+
+enum class EntityType : uint8_t {
+    PLAYER,
+    BULLET,
+    ENEMY,
+    ARTIFACT,
+    WALL,
+    TURRET,
+    MINE
+};
+
+namespace EnemyType {
+    enum : uint8_t {
+        BASIC = 0,
+        FAST,
+        TANK,
+        BOSS,
+        HOMING,
+        LASER
     };
 }
 
-enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT, WALL, TURRET, MINE };
-
-namespace EnemyType {
-    enum : uint8_t { BASIC = 0, FAST, TANK, BOSS, HOMING, LASER };
-}
-
 namespace ArtifactType {
-    enum : uint8_t { DAMAGE = 0, SPEED, HEALTH, RELOAD, EMPTY = 255 };
+    enum : uint8_t {
+        DAMAGE = 0,
+        SPEED,
+        HEALTH,
+        RELOAD,
+        EMPTY = 255
+    };
 }
+
+struct JoinPacket {
+    std::string name;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.text1b(name, 32);     }
+};
 
 struct EventPacket {
     uint8_t type;
@@ -59,9 +82,7 @@ struct EventPacket {
 };
 
 struct ActionPacket {
-    uint8_t type;
-    Vector2 target;
-
+    uint8_t type;           Vector2 target;     
     template <typename S>
     void serialize(S& s) {
         s.value1b(type);
@@ -70,9 +91,7 @@ struct ActionPacket {
 };
 
 struct AdminCommandPacket {
-    uint8_t cmdType;
-    uint32_t value;
-
+    uint8_t cmdType;        uint32_t value;     
     template <typename S>
     void serialize(S& s) {
         s.value1b(cmdType);
@@ -89,7 +108,7 @@ struct PlayerStatsPacket {
     float speed;
     uint32_t scrap;
     uint32_t kills;
-        std::vector<uint8_t> inventory;
+    std::vector<uint8_t> inventory;
     bool isAdmin;
 
     template <typename S>
@@ -121,18 +140,19 @@ struct PlayerInputPacket {
 };
 
 struct EntityState {
-    uint32_t id;
-    Vector2 position;
-    float rotation;
-    float health;
-    float maxHealth;
-    EntityType type;
-    uint8_t subtype;
-    float radius;
-    Color color;
-    uint32_t level;
-    uint32_t kills;
-
+    uint32_t id = 0;
+    Vector2 position = { 0,0 };
+    float rotation = 0;
+    float health = 100.0f;
+    float maxHealth = 100.0f;
+    EntityType type = EntityType::PLAYER;
+    uint8_t subtype = 0;
+    float radius = 10.0f;
+    Color color = WHITE;
+    uint32_t level = 1;
+    uint32_t kills = 0;
+    std::string name = "";
+    uint32_t ownerId = 0; 
     template <typename S>
     void serialize(S& s) {
         s.value4b(id);
@@ -140,14 +160,17 @@ struct EntityState {
         s.value4b(rotation);
         s.value4b(health);
         s.value4b(maxHealth);
-        uint8_t typeInt = static_cast<uint8_t>(type);
+
+                uint8_t typeInt = static_cast<uint8_t>(type);
         s.value1b(typeInt);
         type = static_cast<EntityType>(typeInt);
+
         s.value1b(subtype);
         s.value4b(radius);
         s.object(color);
         s.value4b(level);
         s.value4b(kills);
+        s.text1b(name, 16);         s.value4b(ownerId);
     }
 };
 
@@ -160,8 +183,7 @@ struct WorldSnapshotPacket {
     void serialize(S& s) {
         s.value8b(serverTime);
         s.value4b(wave);
-        s.container(entities, 10000);
-    }
+        s.container(entities, 10000);     }
 };
 
 struct InitPacket {

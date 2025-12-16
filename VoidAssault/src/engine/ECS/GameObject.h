@@ -40,6 +40,7 @@ public:
 
     void TakeDamage(float amount, double currentTime) {
         health -= amount;
+        if (health < 0.0f) health = 0.0f;
         lastDamageTime = currentTime;
     }
 };
