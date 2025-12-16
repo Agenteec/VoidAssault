@@ -1,4 +1,5 @@
-﻿#pragma once
+﻿// common\NetworkPackets.h
+#pragma once
 #include "PacketSerialization.h"
 #include "raylib.h"
 #include <cstdint>
@@ -7,7 +8,20 @@
 
 namespace GamePacket {
     enum Type : uint8_t {
-        JOIN = 0,               INPUT,                  INIT,                   SNAPSHOT,               EVENT,                  STATS,                  ACTION,                 ADMIN_CMD           };
+        JOIN = 0,
+        INPUT,
+        INIT,
+        SNAPSHOT,
+        EVENT,
+        STATS,
+        ACTION,
+        ADMIN_CMD,
+        // Master Server Packets
+        MASTER_REGISTER,
+        MASTER_HEARTBEAT,
+        MASTER_LIST_REQ,
+        MASTER_LIST_RES
+    };
 }
 
 namespace ActionType {
@@ -26,7 +40,9 @@ namespace AdminCmdType {
         GIVE_XP,
         KILL_ALL_ENEMIES,
         SPAWN_BOSS,
-        CLEAR_BUILDINGS,         RESET_SERVER         };
+        CLEAR_BUILDINGS,
+        RESET_SERVER
+    };
 }
 
 enum class EntityType : uint8_t {
@@ -60,12 +76,69 @@ namespace ArtifactType {
     };
 }
 
+
+struct LobbyInfo {
+    uint32_t id;
+    std::string name;
+    std::string ip;
+    uint16_t port;
+    uint8_t currentPlayers;
+    uint8_t maxPlayers;
+    uint8_t wave;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(id);
+        s.text1b(name, 32);
+        s.text1b(ip, 64);
+        s.value2b(port);
+        s.value1b(currentPlayers);
+        s.value1b(maxPlayers);
+        s.value1b(wave);
+    }
+};
+
+struct MasterRegisterPacket {
+    uint16_t gamePort;
+    std::string serverName;
+    uint8_t maxPlayers;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value2b(gamePort);
+        s.text1b(serverName, 32);
+        s.value1b(maxPlayers);
+    }
+};
+
+struct MasterHeartbeatPacket {
+    uint8_t currentPlayers;
+    uint8_t wave;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value1b(currentPlayers);
+        s.value1b(wave);
+    }
+};
+
+struct MasterListResPacket {
+    std::vector<LobbyInfo> lobbies;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.container(lobbies, 100);
+    }
+};
+
+
 struct JoinPacket {
     std::string name;
 
     template <typename S>
     void serialize(S& s) {
-        s.text1b(name, 32);     }
+        s.text1b(name, 32);
+    }
 };
 
 struct EventPacket {
@@ -82,7 +155,8 @@ struct EventPacket {
 };
 
 struct ActionPacket {
-    uint8_t type;           Vector2 target;     
+    uint8_t type;
+    Vector2 target;
     template <typename S>
     void serialize(S& s) {
         s.value1b(type);
@@ -91,7 +165,8 @@ struct ActionPacket {
 };
 
 struct AdminCommandPacket {
-    uint8_t cmdType;        uint32_t value;     
+    uint8_t cmdType;
+    uint32_t value;
     template <typename S>
     void serialize(S& s) {
         s.value1b(cmdType);
@@ -152,7 +227,7 @@ struct EntityState {
     uint32_t level = 1;
     uint32_t kills = 0;
     std::string name = "";
-    uint32_t ownerId = 0; 
+    uint32_t ownerId = 0;
     template <typename S>
     void serialize(S& s) {
         s.value4b(id);
@@ -161,7 +236,7 @@ struct EntityState {
         s.value4b(health);
         s.value4b(maxHealth);
 
-                uint8_t typeInt = static_cast<uint8_t>(type);
+        uint8_t typeInt = static_cast<uint8_t>(type);
         s.value1b(typeInt);
         type = static_cast<EntityType>(typeInt);
 
@@ -170,7 +245,8 @@ struct EntityState {
         s.object(color);
         s.value4b(level);
         s.value4b(kills);
-        s.text1b(name, 16);         s.value4b(ownerId);
+        s.text1b(name, 16);
+        s.value4b(ownerId);
     }
 };
 
@@ -183,7 +259,8 @@ struct WorldSnapshotPacket {
     void serialize(S& s) {
         s.value8b(serverTime);
         s.value4b(wave);
-        s.container(entities, 10000);     }
+        s.container(entities, 10000);
+    }
 };
 
 struct InitPacket {

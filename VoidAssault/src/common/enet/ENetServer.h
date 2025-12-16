@@ -20,7 +20,7 @@ public:
     ENetServer();
     ~ENetServer();
 
-    bool start(uint32_t);
+    bool start(uint32_t port, uint32_t maxClients);
     bool stop();
     bool isRunning() const;
 
@@ -31,7 +31,7 @@ public:
     std::vector<Message::Shared> poll();
 
     void on(uint32_t, RequestHandler);
-
+    std::string getPeerIP(uint32_t id) const;
 private:
     ENetPeer* getClient(uint32_t) const;
     void sendMessage(uint32_t id, DeliveryType type, Message::Shared msg) const;
@@ -54,4 +54,4 @@ private:
     mutable uint32_t currentMsgId_;
 };
 
-std::string addressToString(const ENetAddress* address);
+std::string addressAndPortToString(const ENetAddress* address);

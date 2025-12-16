@@ -18,25 +18,28 @@ double GetSystemTime() {
 
 ServerHost::ServerHost() : running(false) {
     netServer = ENetServer::alloc();
+    masterClient = ENetClient::alloc();
 }
 
 ServerHost::~ServerHost() {
     Stop();
 }
 
-bool ServerHost::Start(int port) {
+bool ServerHost::Start(int port, bool registerOnMaster = true) {
     if (running) return false;
 
 #if defined(__linux__) || defined(__APPLE__)
     signal(SIGPIPE, SIG_IGN);
 #endif
 
-    gameScene.pvpFactor = ConfigManager::GetServer().pvpDamageFactor;
-    std::cout << "SERVER: PvP Damage Factor set to " << gameScene.pvpFactor << "\n";
+    ServerConfig& cfg = ConfigManager::GetServer();
+    gameScene.pvpFactor = cfg.pvpDamageFactor;
+    useMasterServer = registerOnMaster; 
+    if (!netServer->start(port, cfg.maxPlayers)) return false;
 
-    if (!netServer->start(port)) return false;
+    std::cout << "SERVER: Started on port " << port << (useMasterServer ? " (Public)" : " (Offline/LAN)") << std::endl;
+    std::cout << "SERVER: Name '" << cfg.serverName << "', Max Players: " << cfg.maxPlayers << "\n";
 
-    std::cout << "SERVER: Started on port " << port << std::endl;
     running = true;
     serverThread = std::thread(&ServerHost::ServerLoop, this);
     return true;
@@ -46,13 +49,74 @@ void ServerHost::Stop() {
     running = false;
     if (serverThread.joinable()) serverThread.join();
     netServer->stop();
+    if (masterClient) masterClient->disconnect();
+}
+
+void ServerHost::RegisterWithMaster() {
+    if (!useMasterServer) return; 
+    ClientConfig& cCfg = ConfigManager::GetClient();
+    ServerConfig& sCfg = ConfigManager::GetServer();
+
+        if (masterClient->connect(cCfg.masterServerIp, cCfg.masterServerPort)) {
+        std::cout << "SERVER: Connected to Master Server at " << cCfg.masterServerIp << ":" << cCfg.masterServerPort << "\n";
+        connectedToMaster = true;
+
+        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::MASTER_REGISTER);
+
+        MasterRegisterPacket pkt;
+        pkt.gamePort = (uint16_t)ConfigManager::GetServer().port;
+        pkt.serverName = sCfg.serverName;
+        pkt.maxPlayers = (uint8_t)sCfg.maxPlayers;
+
+        serializer.object(pkt);
+        serializer.adapter().flush();
+        masterClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
+    else {
+        std::cout << "SERVER: Failed to connect to Master Server (Will run in Offline mode).\n";
+        connectedToMaster = false;
+    }
+}
+
+void ServerHost::UpdateMasterHeartbeat(float dt) {
+    if (!useMasterServer || !connectedToMaster) return;
+
+    masterClient->poll();
+
+    masterHeartbeatTimer += dt;
+    if (masterHeartbeatTimer >= 5.0f) {
+        masterHeartbeatTimer = 0.0f;
+
+        int playerCount = 0;
+        for (const auto& p : gameScene.objects) {
+            if (p.second->type == EntityType::PLAYER) playerCount++;
+        }
+
+        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::MASTER_HEARTBEAT);
+
+        MasterHeartbeatPacket pkt;
+        pkt.currentPlayers = (uint8_t)playerCount;
+        pkt.wave = (uint8_t)waveCount;
+
+        serializer.object(pkt);
+        serializer.adapter().flush();
+        masterClient->send(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
 }
 
 void ServerHost::ServerLoop() {
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     double accumulator = 0.0;
-    const double dt = 1.0 / 60.0;
+
+    int tickRate = ConfigManager::GetServer().tickRate;
+    if (tickRate <= 0) tickRate = 60;
+    double dt = 1.0 / (double)tickRate;
+
     double snapshotTimer = 0.0;
     double statsTimer = 0.0;
 
@@ -60,14 +124,18 @@ void ServerHost::ServerLoop() {
     waveTimer = 0.0;
     timeToNextWave = 5.0;
 
+        RegisterWithMaster();
+
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
         double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
 
-                if (frameTime > 0.25) frameTime = 0.25;
+        if (frameTime > 0.25) frameTime = 0.25;
 
-                if (netServer->numClients() == 0) {
+                UpdateMasterHeartbeat((float)frameTime);
+
+        if (netServer->numClients() == 0) {
             bool hasEntities = false;
             for (auto& pair : gameScene.objects) {
                 if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
@@ -91,22 +159,6 @@ void ServerHost::ServerLoop() {
                 waveTimer = 0;
                 timeToNextWave = 5.0;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-
-                        auto msgs = netServer->poll();
-            for (auto& msg : msgs) {
-                if (msg->type() == MessageType::CONNECT) {
-                    uint32_t peerId = msg->peerId();
-                    std::cout << "Client " << peerId << " connected (waking up).\n";
-                    auto player = gameScene.CreatePlayerWithId(peerId);
-
-                    InitPacket initPkt; initPkt.playerId = player->id;
-                    Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
-                    ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
-                    netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
-                }
-            }
-            continue;
         }
 
         accumulator += frameTime;
@@ -114,7 +166,7 @@ void ServerHost::ServerLoop() {
         statsTimer += frameTime;
         waveTimer += frameTime;
 
-        if (waveTimer >= timeToNextWave) {
+        if (waveTimer >= timeToNextWave && netServer->numClients() > 0) {
             waveTimer = 0.0;
             timeToNextWave = 20.0 + (waveCount * 2.0);
 
@@ -124,16 +176,8 @@ void ServerHost::ServerLoop() {
             if (currentEnemies < 120) {
                 int enemiesToSpawn = 5 + (waveCount * 2);
                 if (enemiesToSpawn > 60) enemiesToSpawn = 60;
-
-                std::cout << "SERVER: Spawning Wave " << waveCount << " (" << enemiesToSpawn << " enemies)\n";
-                for (int i = 0; i < enemiesToSpawn; i++) {
-                    gameScene.SpawnEnemy();
-                }
-
-                if (waveCount % 5 == 0) {
-                    gameScene.SpawnEnemy(EnemyType::BOSS);
-                }
-
+                for (int i = 0; i < enemiesToSpawn; i++) gameScene.SpawnEnemy();
+                if (waveCount % 5 == 0) gameScene.SpawnEnemy(EnemyType::BOSS);
                 waveCount++;
             }
         }
@@ -168,10 +212,7 @@ void ServerHost::ServerLoop() {
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
                             if (gameScene.objects.count(peerId)) {
                                 auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                                if (p) {
-                                    p->name = pkt.name;
-                                    std::cout << "Player " << peerId << " set name: " << p->name << "\n";
-                                }
+                                if (p) p->name = pkt.name;
                             }
                         }
                     }
@@ -192,33 +233,28 @@ void ServerHost::ServerLoop() {
                         ActionPacket act; des.object(act);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
                             if (gameScene.objects.count(peerId)) {
-                                if (act.type == ActionType::UPGRADE_BUILDING) {
-                                    gameScene.TryUpgrade(peerId, act.target);
-                                }
-                                else {
-                                    gameScene.TryBuild(peerId, act.type, act.target);
-                                }
+                                if (act.type == ActionType::UPGRADE_BUILDING) gameScene.TryUpgrade(peerId, act.target);
+                                else gameScene.TryBuild(peerId, act.type, act.target);
                             }
                         }
                     }
                     else if (type == GamePacket::ADMIN_CMD) {
                         AdminCommandPacket pkt; des.object(pkt);
-                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            gameScene.HandleAdminCommand(peerId, pkt);
-                        }
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) gameScene.HandleAdminCommand(peerId, pkt);
                     }
                 }
             }
         }
 
-                        int maxPhysicsSteps = 5;
+        int maxPhysicsSteps = 5;
         int steps = 0;
         while (accumulator >= dt && steps < maxPhysicsSteps) {
             gameScene.Update((float)dt);
             accumulator -= dt;
             steps++;
         }
-        if (accumulator > dt) accumulator = 0.0; 
+        if (accumulator > dt) accumulator = 0.0;
+
         if (!gameScene.pendingEvents.empty()) {
             for (const auto& evt : gameScene.pendingEvents) {
                 Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
@@ -230,110 +266,57 @@ void ServerHost::ServerLoop() {
             gameScene.pendingEvents.clear();
         }
 
-        if (snapshotTimer >= 0.033) {             BroadcastSnapshot();
+        if (snapshotTimer >= 0.033) {
+            BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-        if (statsTimer >= 0.2) {             for (auto& [id, obj] : gameScene.objects) {
+        if (statsTimer >= 0.2) {
+            for (auto& [id, obj] : gameScene.objects) {
                 if (obj->type == EntityType::PLAYER) {
                     auto p = std::dynamic_pointer_cast<Player>(obj);
-
                     PlayerStatsPacket stats;
-                    stats.level = p->level;
-                    stats.currentXp = p->currentXp;
-                    stats.maxXp = p->maxXp;
-                    stats.maxHealth = p->maxHealth;
-                    stats.damage = p->curDamage;
-                    stats.speed = p->curSpeed;
-                    stats.scrap = p->scrap;
-                    stats.kills = p->kills;
-                    stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
+                    stats.level = p->level; stats.currentXp = p->currentXp; stats.maxXp = p->maxXp;
+                    stats.maxHealth = p->maxHealth; stats.damage = p->curDamage; stats.speed = p->curSpeed;
+                    stats.scrap = p->scrap; stats.kills = p->kills; stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
                     stats.isAdmin = p->isAdmin;
-
                     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
-                    ser.value1b(GamePacket::STATS);
-                    ser.object(stats);
-                    ser.adapter().flush();
-
+                    ser.value1b(GamePacket::STATS); ser.object(stats); ser.adapter().flush();
                     netServer->send(id, DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
                 }
             }
             statsTimer = 0;
         }
-
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
 
 void ServerHost::BroadcastSnapshot() {
     if (netServer->numClients() == 0) return;
-
     WorldSnapshotPacket snap;
     snap.serverTime = GetSystemTime();
     snap.wave = waveCount;
-
     for (auto& [id, obj] : gameScene.objects) {
-        EntityState state;
-        state.id = obj->id;
-
-        if (obj->body) {
-            cpVect pos = cpBodyGetPosition(obj->body);
-            state.position = ToRay(pos);
-            state.rotation = obj->rotation;
-        }
-        else {
-            state.position = { 0,0 };
-            state.rotation = 0;
-        }
-
-        state.health = obj->health;
-        state.maxHealth = obj->maxHealth;
-        state.type = obj->type;
-        state.color = obj->color;
-
-        state.level = 1;
-        state.kills = 0;
-        state.radius = 20.0f;
-        state.subtype = 0;
-        state.ownerId = 0;
-
+        EntityState state; state.id = obj->id;
+        if (obj->body) { cpVect pos = cpBodyGetPosition(obj->body); state.position = ToRay(pos); state.rotation = obj->rotation; }
+        else { state.position = { 0,0 }; state.rotation = 0; }
+        state.health = obj->health; state.maxHealth = obj->maxHealth; state.type = obj->type; state.color = obj->color;
+        state.level = 1; state.kills = 0; state.radius = 20.0f; state.subtype = 0; state.ownerId = 0;
         if (obj->type == EntityType::PLAYER) {
             auto p = std::dynamic_pointer_cast<Player>(obj);
-            if (p) {
-                state.level = p->level;
-                state.kills = p->kills;
-                state.name = p->name;
-            }
+            if (p) { state.level = p->level; state.kills = p->kills; state.name = p->name; }
         }
-        else if (obj->type == EntityType::BULLET) {
-            state.radius = 5.0f;
-        }
+        else if (obj->type == EntityType::BULLET) state.radius = 5.0f;
         else if (obj->type == EntityType::ENEMY) {
-            auto e = std::dynamic_pointer_cast<Enemy>(obj);
-            if (e) state.subtype = e->enemyType;
+            auto e = std::dynamic_pointer_cast<Enemy>(obj); if (e) state.subtype = e->enemyType;
         }
-        else if (obj->type == EntityType::WALL) {
-            state.radius = 25.0f;
-            auto c = std::dynamic_pointer_cast<Construct>(obj);
-            if (c) { state.ownerId = c->ownerId; state.level = c->level; }
+        else if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
+            auto c = std::dynamic_pointer_cast<Construct>(obj); if (c) { state.ownerId = c->ownerId; state.level = c->level; }
+            if (obj->type == EntityType::WALL) state.radius = 25.0f; else if (obj->type == EntityType::TURRET) state.radius = 20.0f; else state.radius = 15.0f;
         }
-        else if (obj->type == EntityType::TURRET) {
-            state.radius = 20.0f;
-            auto c = std::dynamic_pointer_cast<Construct>(obj);
-            if (c) { state.ownerId = c->ownerId; state.level = c->level; }
-        }
-        else if (obj->type == EntityType::MINE) {
-            state.radius = 15.0f;
-            auto c = std::dynamic_pointer_cast<Construct>(obj);
-            if (c) { state.ownerId = c->ownerId; state.level = c->level; }
-        }
-
         snap.entities.push_back(state);
     }
-
     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
-    ser.value1b(GamePacket::SNAPSHOT);
-    ser.object(snap);
-    ser.adapter().flush();
+    ser.value1b(GamePacket::SNAPSHOT); ser.object(snap); ser.adapter().flush();
     netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
 }

@@ -1,8 +1,12 @@
 ﻿#pragma once
-#include "../../engine/Scenes/Scene.h"
+#include "raylib_compatibility.h"
+#include "engine/Scenes/Scene.h"
 #include "../vircontrols/InGameKeyboard.h"
+#include "common/NetworkPackets.h"
+#include "common/enet/ENetClient.h"
 #include <string>
-
+#include <vector>
+#include <mutex> 
 class GameClient;
 
 enum class MenuState {
@@ -17,16 +21,25 @@ private:
     char portBuffer[16] = "";
     char nameBuffer[32] = "";
 
+        char serverNameBuffer[32] = "";
+    float hostMaxPlayers = 8;
+    float hostTps = 60;
+    bool isPublicServer = true; 
     bool isEditingIp = false;
     bool isEditingPort = false;
     bool isEditingName = false;
+    bool isEditingServerName = false;
 
     MenuState currentState = MenuState::MAIN;
-    int activeMpTab = 0; // 0 = Connect, 1 = Host
-
+    int activeMpTab = 0; 
     InGameKeyboard virtualKeyboard;
 
+        std::vector<LobbyInfo> lobbyList;
+    std::mutex lobbyMutex;     bool isRefreshing = false;
+
+    
     bool DrawInputField(Rectangle bounds, char* buffer, int bufferSize, bool& editMode);
+    void RefreshLobbyList();
 
 public:
     MainMenuScene(GameClient* g);

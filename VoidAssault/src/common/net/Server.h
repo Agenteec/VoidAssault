@@ -16,7 +16,8 @@ public:
     Server();
     virtual ~Server();
 
-    virtual bool start(uint32_t) = 0;
+    virtual bool start(uint32_t port, uint32_t maxClients) = 0;
+
     virtual bool stop() = 0;
     virtual bool isRunning() const = 0;
 
@@ -29,8 +30,6 @@ public:
     virtual void on(uint32_t, RequestHandler) = 0;
 
 private:
-    // prevent copy-construction
     Server(const Server&);
-    // prevent assignment
     Server& operator=(const Server&);
 };

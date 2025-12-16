@@ -1,39 +1,31 @@
 ﻿{
-    "title_void_assault": "VOID ASSAULT",
+  "lang_name": "Русский",
+  "title_void_assault": "VOID ASSAULT",
 
-    "lbl_player_setup": "Настройки игрока",
-    "lbl_nickname": "Никнейм:",
-    "lbl_connection": "Настройки подключения",
-    "lbl_server_setup": "Настройки сервера",
+  "lbl_nickname": "Ник:",
+  "tabs_multiplayer": "Список;Прямое;Хост",
 
-    "tabs_multiplayer": "Подключиться;Создать",
+  "btn_join": "ПОДКЛЮЧИТЬСЯ",
+  "btn_create_lobby": "СОЗДАТЬ СЕРВЕР",
+  "btn_settings": "НАСТРОЙКИ",
+  "btn_singleplayer": "ЛОКАЛЬНАЯ ИГРА",
+  "btn_multiplayer": "СЕТЕВАЯ ИГРА",
+  "btn_exit": "ВЫХОД",
+  "btn_back": "НАЗАД",
+  "btn_refresh": "ОБНОВИТЬ",
 
-    "btn_join": "ПОДКЛЮЧИТЬСЯ",
-    "btn_create_lobby": "СОЗДАТЬ ЛОББИ",
-    "btn_settings": "НАСТРОЙКИ",
-    "btn_singleplayer": "ОДИНОЧНАЯ ИГРА",
-    "btn_multiplayer": "СЕТЕВАЯ ИГРА",
-    "btn_exit": "ВЫХОД",
-    "btn_back": "НАЗАД",
-    "btn_save": "СОХРАНИТЬ",
+  "lbl_ip": "IP адрес:",
+  "lbl_port": "Порт:",
+  "lbl_server_name": "Название сервера:",
+  "lbl_max_players": "Макс. игроков:",
+  "lbl_tickrate": "Тикрейт (TPS):",
+  "chk_public": "Публичный (В списке)",
 
-    "lbl_ip": "IP адрес:",
-    "lbl_port": "Порт:",
+  "header_browser_name": "Название",
+  "header_browser_players": "Игроки",
+  "header_browser_wave": "Волна",
+  "msg_no_servers": "Серверы не найдены.",
 
-    "header_audio": "Аудио",
-    "header_graphics": "Графика",
-    "lbl_master_vol": "Общая громкость:",
-    "lbl_music_vol": "Громкость музыки:",
-    "lbl_sfx_vol": "Громкость звуков:",
-    "lbl_fullscreen": "Полноэкранный режим:",
-    "lbl_language": "Язык:",
-
-    "game_wave": "Волна:",
-    "game_score": "Счет:",
-    "game_resources": "Ресурсы:",
-    "game_reactor": "Целостность реактора:",
-
-    "msg_connecting": "Подключение...",
-    "msg_failed": "Ошибка подключения",
-    "msg_waiting": "Ожидание хоста..."
+  "lbl_master_vol": "Громкость:",
+  "lbl_language": "Язык:"
 }

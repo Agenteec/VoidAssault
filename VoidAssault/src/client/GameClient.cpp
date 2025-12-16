@@ -43,11 +43,11 @@ void GameClient::ReturnToMenu() {
     ChangeScene(std::make_shared<MainMenuScene>(this));
 }
 
-int GameClient::StartHost(int startPort) {
+int GameClient::StartHost(int startPort, bool publicServer) {
     StopHost();
     localServer = std::make_unique<ServerHost>();
     for (int p = startPort; p < startPort + 10; p++) {
-        if (localServer->Start(p)) {
+                if (localServer->Start(p, publicServer)) {
             TraceLog(LOG_INFO, "Local Server Started on port %d", p);
             return p;
         }
@@ -68,11 +68,9 @@ void GameClient::StopHost() {
 float GameClient::GetUIScale() const {
     int h = GetScreenHeight();
     float scale = (float)h / 720.0f;
-
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     scale *= 1.1f;
 #endif
-
     if (scale < 0.8f) scale = 0.8f;
     return scale;
 }
@@ -80,8 +78,8 @@ float GameClient::GetUIScale() const {
 void GameClient::Run() {
     ChangeScene(std::make_shared<MainMenuScene>(this));
 
-        float inputSendTimer = 0.0f;
-    const float inputSendInterval = 1.0f / 60.0f; 
+    float inputSendTimer = 0.0f;
+    const float inputSendInterval = 1.0f / 60.0f;
     while (!WindowShouldClose()) {
         if (nextScene) {
             if (currentScene) currentScene->Exit();
@@ -118,7 +116,6 @@ void GameClient::Run() {
         if (currentScene) {
             currentScene->Update(dt);
 
-                                                                                                                                                            
             BeginDrawing();
             ClearBackground(Theme::COL_BACKGROUND);
             currentScene->Draw();

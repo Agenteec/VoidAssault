@@ -23,7 +23,7 @@ public:
 	void ChangeScene(std::shared_ptr<Scene> newScene);
 	void ReturnToMenu();
 
-	int StartHost(int port);
+	int StartHost(int port, bool publicServer);
 	void StopHost();
 
 	int GetWidth() const { return GetScreenWidth(); }

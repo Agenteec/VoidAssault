@@ -8,12 +8,17 @@
 #include "raylib.h"
 #include "nlohmann/json.hpp"
 using json = nlohmann::json;
+
+
+#ifndef MASTER_IP
+#define MASTER_IP "127.0.0.1"
+#endif
 struct SavedServer {
 	std::string name;
 	std::string ip;
 	int port;
-	
 };
+
 struct ClientConfig {
 	std::string playerName = "Player";
 	std::string lastIp = "127.0.0.1";
@@ -24,21 +29,28 @@ struct ClientConfig {
 	bool fullscreen = false;
 	int targetFPS = 60;
 
+	std::string masterServerIp = MASTER_IP;
+	int masterServerPort = 8080;
+
 	int resolutionWidth = 1280;
 	int resolutionHeight = 720;
 
 	std::vector<SavedServer> favoriteServers;
 };
+
 struct ServerConfig {
 	int port = 7777;
 	int maxPlayers = 8;
 	int tickRate = 60;
 	float pvpDamageFactor = 1.0f;
+	std::string serverName = "Void Lobby";
 };
+
 struct GameConfig {
 	ClientConfig client;
 	ServerConfig server;
 };
+
 class ConfigManager {
 private:
 	static GameConfig config;

@@ -4,6 +4,7 @@
 #endif
 
 #include "enet/ENetServer.h"
+#include "enet/ENetClient.h"
 #include "Scenes/GameScene.h"
 #include <thread>
 #include <atomic>
@@ -11,6 +12,11 @@
 class ServerHost {
     ENetServer::Shared netServer;
     GameScene gameScene;
+
+    ENetClient::Shared masterClient;
+    double masterHeartbeatTimer = 0.0;
+    bool connectedToMaster = false;
+    bool useMasterServer = false;
 
     std::atomic<bool> running{ false };
     std::thread serverThread;
@@ -22,10 +28,13 @@ class ServerHost {
 public:
     ServerHost();
     ~ServerHost();
-
-    bool Start(int port);
+    bool Start(int port, bool registerOnMaster);
     void Stop();
 
     void ServerLoop();
     void BroadcastSnapshot();
+
+private:
+    void RegisterWithMaster();
+    void UpdateMasterHeartbeat(float dt);
 };

@@ -1,7 +1,9 @@
-﻿#include "SettingsScene.h"
+﻿// client\scenes\SettingsScene.cpp
+#include "SettingsScene.h"
 #include "engine/Utils/ConfigManager.h"
 #include "ResourceManager.h"
 #include <string>
+
 void SettingsScene::Enter() {
 #if !defined(PLATFORM_ANDROID) && !defined(ANDROID)
 	currentResIndex = 0;
@@ -15,12 +17,15 @@ void SettingsScene::Enter() {
 	}
 #endif
 }
+
 void SettingsScene::Exit() {}
 void SettingsScene::Update(float dt) {}
+
 void SettingsScene::Draw() {
 	ResourceManager::Get().UpdateBackground(GetFrameTime());
 	ResourceManager::Get().DrawBackground();
 }
+
 void SettingsScene::DrawGUI() {
 	int w = game->GetWidth();
 	int h = game->GetHeight();

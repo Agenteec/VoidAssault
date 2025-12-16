@@ -3,24 +3,34 @@
 #include "Common.h"
 #include "time/Time.h"
 
-const uint32_t MAX_CONNECTIONS = 64;
 const std::time_t TIMEOUT_MS = 5000;
 const uint8_t RELIABLE_CHANNEL = 0;
 const uint8_t UNRELIABLE_CHANNEL = 1;
 const uint8_t NUM_CHANNELS = 2;
 
-std::string addressToString(const ENetAddress* address)
+std::string addressAndPortToString(const ENetAddress* address)
 {
     char ip_address_str[256];
     enet_address_get_host_ip(address, ip_address_str, sizeof(ip_address_str));
     return std::string(ip_address_str) + ":" + std::to_string(address->port);
 }
-
+std::string addressToString(const ENetAddress* address)
+{
+    char ip_address_str[256];
+    enet_address_get_host_ip(address, ip_address_str, sizeof(ip_address_str));
+    return std::string(ip_address_str);
+}
 ENetServer::Shared ENetServer::alloc()
 {
     return std::make_shared<ENetServer>();
 }
-
+std::string ENetServer::getPeerIP(uint32_t id) const {
+    ENetPeer* peer = getClient(id);
+    if (peer) {
+        return addressToString(&peer->address);
+    }
+    return "Unknown";
+}
 ENetServer::ENetServer()
     : host_(nullptr)
     , currentMsgId_(0)
@@ -32,16 +42,15 @@ ENetServer::~ENetServer()
     stop();
 }
 
-bool ENetServer::start(uint32_t port)
+bool ENetServer::start(uint32_t port, uint32_t maxClients)
 {
     if (host_) return true;
 
     ENetAddress address = { 0 };
     address.host = ENET_HOST_ANY;
-    address.port = port;
+    address.port = (enet_uint16)port;
 
-
-    host_ = enet_host_create(&address, MAX_CONNECTIONS, NUM_CHANNELS, 0, 0);
+    host_ = enet_host_create(&address, (size_t)maxClients, NUM_CHANNELS, 0, 0);
 
     if (host_ == nullptr) {
         LOG_ERROR("Failed to create ENet server host (Port might be busy)");
