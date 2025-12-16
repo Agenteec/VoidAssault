@@ -60,17 +60,14 @@ void GameClient::StopHost() {
 	}
 }
 float GameClient::GetUIScale() const {
-	// ВАЖНО: Берем текущие размеры окна, а не закешированные
-	int h = GetScreenHeight();
+		int h = GetScreenHeight();
 	float scale = (float)h / 720.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-	// Для Android делаем интерфейс покрупнее (HUD)
-	scale *= 1.5f;
+		scale *= 1.1f;
 #endif
 
-	if (scale < 0.8f) scale = 0.8f; // Минимальный скейл
-	return scale;
+	if (scale < 0.8f) scale = 0.8f; 	return scale;
 }
 void GameClient::Run() {
 	ChangeScene(std::make_shared<MainMenuScene>(this));
