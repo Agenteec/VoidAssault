@@ -9,7 +9,10 @@ struct Particle {
     float life;
     float decayRate;
     float size;
+    float rotation;
+    float rotSpeed;
     Color color;
+    int shapeType;
 };
 
 class ParticleSystem {
@@ -24,15 +27,18 @@ public:
         p.size = size;
         p.life = 1.0f;
         p.decayRate = 1.0f / lifeTime;
+        p.rotation = (float)GetRandomValue(0, 360);
+        p.rotSpeed = (float)GetRandomValue(-5, 5);
+        p.shapeType = GetRandomValue(0, 2);
         particles.push_back(p);
     }
 
     void SpawnExplosion(Vector2 pos, int count, Color col) {
         for (int i = 0; i < count; i++) {
             float angle = (float)GetRandomValue(0, 360) * DEG2RAD;
-            float speed = (float)GetRandomValue(50, 200) / 10.0f;
+            float speed = (float)GetRandomValue(50, 300) / 10.0f;
             Vector2 vel = { cosf(angle) * speed, sinf(angle) * speed };
-            Spawn(pos, vel, col, (float)GetRandomValue(3, 8), 0.5f);
+            Spawn(pos, vel, col, (float)GetRandomValue(5, 12), 0.6f);
         }
     }
 
@@ -41,7 +47,8 @@ public:
             p.position.x += p.velocity.x * dt * 60.0f;
             p.position.y += p.velocity.y * dt * 60.0f;
             p.life -= p.decayRate * dt;
-            p.size *= 0.95f;
+            p.size *= 0.96f;
+            p.rotation += p.rotSpeed;
         }
 
         particles.erase(
@@ -54,7 +61,16 @@ public:
         for (const auto& p : particles) {
             Color c = p.color;
             c.a = (unsigned char)(p.life * 255);
-            DrawCircleV(p.position, p.size, c);
+
+            if (p.shapeType == 1) {
+                DrawPoly(p.position, 3, p.size, p.rotation, c);
+            }
+            else if (p.shapeType == 2) {
+                DrawPoly(p.position, 4, p.size, p.rotation, c);
+            }
+            else {
+                DrawCircleV(p.position, p.size * 0.8f, c);
+            }
         }
     }
 };

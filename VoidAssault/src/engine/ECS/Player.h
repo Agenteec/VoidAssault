@@ -1,9 +1,9 @@
-﻿// engine/ECS/Player.h
-#pragma once
+﻿#pragma once
 #include "GameObject.h"
 #include "../PhysicsUtils.h"
 #include "raymath.h"
 #include <vector>
+#include <algorithm>
 
 struct ArtifactStats {
     float damageMult = 0.0f;
@@ -14,17 +14,20 @@ struct ArtifactStats {
 
 class Player : public GameObject {
 public:
+    // Base Stats
+    const float BASE_HP = 100.0f;
+    const float BASE_DMG = 25.0f; // Чуть подняли базовый урон
     const float BASE_SPEED = 220.0f;
     const float BASE_RELOAD = 0.5f;
-    const float BASE_DAMAGE = 20.0f;
-    const float BASE_HP = 100.0f;
 
     uint32_t level = 1;
     float currentXp = 0.0f;
     float maxXp = 100.0f;
     uint32_t scrap = 0;
     uint32_t kills = 0;
+    bool isAdmin = false;
 
+    // Инвентарь
     uint8_t inventory[6];
     ArtifactStats artifacts;
 
@@ -34,10 +37,14 @@ public:
     bool spawnBulletSignal = false;
     Vector2 bulletDir = { 0,0 };
     Vector2 knockback = { 0, 0 };
-
+    // Calculated Realtime Stats
     float curSpeed = 0;
     float curReload = 0;
     float curDamage = 0;
+    float curRegen = 0;
+    float curBulletSpeed = 0;
+    float curBulletPen = 0; // Duration
+    float curBodyDmg = 0;
 
     Player(uint32_t id, Vector2 startPos, cpSpace* space) : GameObject(id, EntityType::PLAYER) {
         spaceRef = space;
@@ -53,8 +60,8 @@ public:
         cpBodySetMoment(body, INFINITY);
 
         shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
-        cpShapeSetFriction(shape, 0.0f);
-        cpShapeSetElasticity(shape, 0.0f);
+        cpShapeSetFriction(shape, 0.5f); // Добавили трение
+        cpShapeSetElasticity(shape, 0.1f); // Почти не отскакивает
         cpShapeSetCollisionType(shape, COLLISION_PLAYER);
         cpShapeSetUserData(shape, (void*)this);
 
@@ -73,8 +80,9 @@ public:
         RecalculateStats();
     }
 
-    // Автоматическая прокачка
+    // Автоматическая прокачка (Warcraft 3 style)
     void RecalculateStats() {
+        // 1. Считаем бонусы от артефактов
         artifacts = { 0,0,0,0 };
         for (int i = 0; i < 6; i++) {
             if (inventory[i] == ArtifactType::EMPTY) continue;
@@ -86,18 +94,34 @@ public:
             }
         }
 
-        float lvlScale = (float)(level - 1);
+        // 2. Рассчитываем прирост статов от уровня
+        // Каждый уровень дает прирост к HP и Урону
+        // Каждые 3 уровня дают прирост к Скорости и Перезарядке
+        float lvl = (float)(level - 1);
 
-        // Формулы автоматического роста
-        maxHealth = (BASE_HP + artifacts.healthFlat) + (lvlScale * 20.0f); // +20 HP за уровень
-        curDamage = BASE_DAMAGE + (lvlScale * 3.0f);                       // +3 урона за уровень
-        curDamage *= (1.0f + artifacts.damageMult);
+        // HP: +20 за уровень
+        maxHealth = (BASE_HP + artifacts.healthFlat) + (lvl * 20.0f);
 
-        curSpeed = BASE_SPEED + (lvlScale * 2.0f);                         // Немного скорости
-        curSpeed *= (1.0f + artifacts.speedMult);
+        // Реген: База 1% от макс хп + 0.1% за уровень
+        float regenPct = 0.01f + (lvl * 0.001f);
+        curRegen = maxHealth * regenPct;
 
-        curReload = BASE_RELOAD * (1.0f - (lvlScale * 0.02f) - artifacts.reloadMult); // Чуть быстрее перезарядка
+        // Таран: Растет с уровнем
+        curBodyDmg = 20.0f + (lvl * 5.0f);
+
+        // Урон пули: +3 за уровень
+        curDamage = (BASE_DMG + (lvl * 3.0f)) * (1.0f + artifacts.damageMult);
+
+        // Скорость: +1.5 за уровень (Warcraft style agility scaling)
+        curSpeed = (BASE_SPEED + (lvl * 1.5f)) * (1.0f + artifacts.speedMult);
+
+        // Перезарядка: -1% за уровень (диминишинг)
+        curReload = BASE_RELOAD * (1.0f - (lvl * 0.01f) - artifacts.reloadMult);
         if (curReload < 0.1f) curReload = 0.1f;
+
+        // Скорость пули и пробитие тоже растут немного
+        curBulletSpeed = 600.0f + (lvl * 10.0f);
+        curBulletPen = 0.5f + (lvl * 0.05f); // Пуля живет дольше и пролетает дальше
 
         if (health > maxHealth) health = maxHealth;
     }
@@ -120,17 +144,17 @@ public:
             level++;
             maxXp *= 1.2f;
             RecalculateStats();
-            health = maxHealth; // Полное лечение при уровне
+            health = maxHealth; // Лечение при левелапе (как в RPG)
         }
     }
 
     void Update(float dt) override {
         // Регенерация
         double currentTime = GetTime();
-        float baseRegen = maxHealth * 0.01f; // 1%
-        if (currentTime - lastDamageTime > 5.0) baseRegen *= 5.0f; // 5% вне боя
+        float regen = curRegen;
+        if (currentTime - lastDamageTime > 10.0) regen *= 4.0f; // Вне боя реген x4
 
-        health += baseRegen * dt;
+        health += regen * dt;
         if (health > maxHealth) health = maxHealth;
 
         if (shootCooldown > 0) shootCooldown -= dt;
@@ -143,7 +167,7 @@ public:
             spawnBulletSignal = true;
             bulletDir = Vector2Subtract(aimTarget, pos);
             Vector2 recoilDir = Vector2Normalize(bulletDir);
-            knockback = Vector2Subtract(knockback, Vector2Scale(recoilDir, 150.0f));
+            knockback = Vector2Subtract(knockback, Vector2Scale(recoilDir, 100.0f));
         }
 
         Vector2 diff = Vector2Subtract(aimTarget, pos);

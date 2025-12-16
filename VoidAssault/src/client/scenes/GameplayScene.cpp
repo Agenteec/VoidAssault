@@ -39,9 +39,9 @@ void GameplayScene::Enter() {
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     float joyY = h - 180.0f;
-    float joyOffset = 180.0f;
-    leftStick = std::make_unique<VirtualJoystick>(Vector2{ joyOffset, joyY }, 50.0f, 100.0f);
-    rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - joyOffset, joyY }, 50.0f, 100.0f);
+    float joyOffset = 220.0f;
+    leftStick = std::make_unique<VirtualJoystick>(Vector2{ joyOffset, joyY }, 60.0f, 120.0f);
+    rightStick = std::make_unique<VirtualJoystick>(Vector2{ w - joyOffset, joyY }, 60.0f, 120.0f);
     rightStick->SetColors({ 200, 200, 200, 100 }, { 220, 50, 50, 200 });
 #endif
 }
@@ -57,6 +57,18 @@ void GameplayScene::SendAction(const ActionPacket& act) {
         bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
         serializer.value1b(GamePacket::ACTION);
         serializer.object(act);
+        serializer.adapter().flush();
+        game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
+}
+
+void GameplayScene::SendAdminCmd(uint8_t cmd, uint32_t val) {
+    if (game->netClient && game->netClient->isConnected()) {
+        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::ADMIN_CMD);
+        AdminCommandPacket pkt = { cmd, val };
+        serializer.object(pkt);
         serializer.adapter().flush();
         game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
@@ -114,6 +126,7 @@ void GameplayScene::OnMessage(Message::Shared msg) {
             myScrap = stats.scrap;
             myKills = stats.kills;
                         if (stats.inventory.size() == 6) myInventory = stats.inventory;
+            isAdmin = stats.isAdmin;
         }
     }
     else if (packetTypeInt == GamePacket::EVENT) {
@@ -164,26 +177,31 @@ void GameplayScene::Update(float dt) {
 
     pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
 
-        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+    if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
         if (selectedBuildType != 0) {
             ActionPacket act;
             act.type = selectedBuildType;
-            act.target = pkt.aimTarget;             SendAction(act);
+            act.target = pkt.aimTarget;
+            SendAction(act);
             if (!IsKeyDown(KEY_LEFT_SHIFT)) selectedBuildType = 0;
         }
         else {
-                        ActionPacket act;
+            ActionPacket act;
             act.type = ActionType::UPGRADE_BUILDING;
             act.target = pkt.aimTarget;
             SendAction(act);
         }
     }
 
+    if (IsKeyPressed(KEY_F1) && isAdmin) showAdminPanel = !showAdminPanel;
+    if (IsKeyPressed(KEY_TAB)) showLeaderboard = !showLeaderboard;
+
     if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && selectedBuildType == 0) {
-        pkt.isShooting = true;
+        if (GetMouseX() > 300 || GetMouseY() < GetScreenHeight() - 200)
+            pkt.isShooting = true;
     }
 
-        if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) selectedBuildType = 0;
+    if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) selectedBuildType = 0;
 
     Vector2 diff = Vector2Subtract(pkt.aimTarget, predictedPos);
     predictedRot = atan2f(diff.y, diff.x) * RAD2DEG;
@@ -215,7 +233,7 @@ void GameplayScene::Draw() {
     int gridW = 4000; int gridH = 4000;
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
 
-        for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.3f));
+    for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.3f));
     for (int i = 0; i <= gridH; i += 50) DrawLine(0, i, gridW, i, Fade(Theme::COL_GRID, 0.3f));
 
     auto DrawDiepTank = [&](Vector2 pos, float rot, Color mainCol, float radius, float hp, float maxHp, bool isMe) {
@@ -265,8 +283,8 @@ void GameplayScene::Draw() {
                 Color enemyColor = Theme::COLOR_RED; int sides = 3;
                 switch (renderState.subtype) {
                 case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break;
-                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;
-                case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 5; break;
+                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;                 case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 5; break;
+                case EnemyType::HOMING: enemyColor = ORANGE; sides = 3; break;
                 }
                 DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 }); DrawPoly(pos, sides, radius, rot, enemyColor);
                 float hpPct = renderState.health / renderState.maxHealth;
@@ -302,10 +320,9 @@ void GameplayScene::Draw() {
         }
     }
 
-        if (selectedBuildType > 0) {
+    if (selectedBuildType > 0) {
         Vector2 mPos = GetScreenToWorld2D(GetMousePosition(), camera);
-
-                float gridX = roundf(mPos.x / 50.0f) * 50.0f;
+        float gridX = roundf(mPos.x / 50.0f) * 50.0f;
         float gridY = roundf(mPos.y / 50.0f) * 50.0f;
         Vector2 snapPos = { gridX, gridY };
 
@@ -321,19 +338,101 @@ void GameplayScene::Draw() {
     EndMode2D();
 }
 
+void GameplayScene::DrawMinimap(const std::vector<EntityState>& entities) {
+    float mapSize = 150.0f * game->GetUIScale();
+    float padding = 10.0f * game->GetUIScale();
+    Vector2 mapOrigin = { padding, padding };
+
+    DrawRectangleV(mapOrigin, { mapSize, mapSize }, Fade(BLACK, 0.7f));
+    DrawRectangleLinesEx({ mapOrigin.x, mapOrigin.y, mapSize, mapSize }, 2, WHITE);
+
+    float worldSize = 4000.0f;
+    float scale = mapSize / worldSize;
+
+    for (const auto& e : entities) {
+        Vector2 mapPos = { mapOrigin.x + e.position.x * scale, mapOrigin.y + e.position.y * scale };
+        Color dotCol = WHITE;
+        if (e.id == myPlayerId) dotCol = BLUE;
+        else if (e.type == EntityType::PLAYER) dotCol = SKYBLUE;
+        else if (e.type == EntityType::ENEMY) dotCol = RED;
+        else continue;
+
+        DrawCircleV(mapPos, 2.0f, dotCol);
+    }
+}
+
+void GameplayScene::DrawLeaderboard(const std::vector<EntityState>& entities) {
+    if (!showLeaderboard) return;
+    int w = GetScreenWidth();
+    float uiScale = game->GetUIScale();
+    float boardW = 200.0f * uiScale;
+    float startX = w - boardW - 10;
+    float startY = 10;
+
+    std::vector<EntityState> players;
+    for (const auto& e : entities) if (e.type == EntityType::PLAYER) players.push_back(e);
+
+    std::sort(players.begin(), players.end(), [](const EntityState& a, const EntityState& b) {
+        return a.kills > b.kills;
+        });
+
+    DrawText("LEADERBOARD", startX, startY, 10 * uiScale, WHITE);
+    float y = startY + 15 * uiScale;
+    for (const auto& p : players) {
+        const char* name = (p.id == myPlayerId) ? "You" : TextFormat("ID %d", p.id);
+        DrawText(name, startX, y, 10 * uiScale, (p.id == myPlayerId) ? YELLOW : WHITE);
+        DrawText(TextFormat("%d", p.kills), startX + 150 * uiScale, y, 10 * uiScale, WHITE);
+        y += 12 * uiScale;
+    }
+}
+
+void GameplayScene::DrawAdminPanel() {
+    if (!showAdminPanel || !isAdmin) return;
+    float uiScale = game->GetUIScale();
+    float cx = GetScreenWidth() / 2.0f;
+    float cy = GetScreenHeight() / 2.0f;
+    Rectangle panel = { cx - 150 * uiScale, cy - 150 * uiScale, 300 * uiScale, 300 * uiScale };
+
+    DrawRectangleRec(panel, Theme::COL_PANEL);
+    DrawRectangleLinesEx(panel, 2, RED);
+    DrawText("ADMIN PANEL", panel.x + 10, panel.y + 10, 20 * uiScale, RED);
+
+    float btnH = 30 * uiScale;
+    float y = panel.y + 50 * uiScale;
+
+    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Give 1000 Scrap")) SendAdminCmd(AdminCmdType::GIVE_SCRAP, 1000);
+    y += 40 * uiScale;
+    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Give 1 Level")) SendAdminCmd(AdminCmdType::GIVE_XP, 1000);
+    y += 40 * uiScale;
+    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Kill All Enemies")) SendAdminCmd(AdminCmdType::KILL_ALL_ENEMIES, 0);
+    y += 40 * uiScale;
+    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Spawn Boss")) SendAdminCmd(AdminCmdType::SPAWN_BOSS, 0);
+}
+
 void GameplayScene::DrawGUI() {
     int w = GetScreenWidth(); int h = GetScreenHeight(); float uiScale = game->GetUIScale();
     GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale)); float padding = 20 * uiScale;
 
-        DrawText(TextFormat("Scrap: %d", myScrap), padding, padding, 20 * uiScale, GOLD);
+    if (!snapshotManager.history.empty()) {
+        DrawMinimap(snapshotManager.history.back().entities);
+        DrawLeaderboard(snapshotManager.history.back().entities);
+    }
+
+    DrawText(TextFormat("Scrap: %d", myScrap), padding, 170 * uiScale, 20 * uiScale, GOLD);
     char waveText[32]; sprintf(waveText, "WAVE %d", currentWave);
     DrawText(waveText, (w - MeasureText(waveText, 30 * uiScale)) / 2, padding, 30 * uiScale, Theme::COL_ACCENT);
 
-        const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
+    const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
     int costs[] = { 10, 50, 25 };
     float bY = h - 200 * uiScale;
+    float bX = w - 130 * uiScale;
+#if defined(PLATFORM_ANDROID) || defined(ANDROID)
+    bY = h - 350 * uiScale;
+    bX = w - 100 * uiScale;
+#endif
+
     for (int i = 0; i < 3; i++) {
-        Rectangle bRect = { w - 130 * uiScale, bY + i * (45 * uiScale), 110 * uiScale, 40 * uiScale };
+        Rectangle bRect = { bX, bY + i * (45 * uiScale), 110 * uiScale, 40 * uiScale };
         int type = i + 1;
         if (myScrap >= costs[i]) {
             if (GuiButton(bRect, builds[i])) selectedBuildType = (selectedBuildType == type) ? 0 : type;
@@ -347,13 +446,10 @@ void GameplayScene::DrawGUI() {
     if (selectedBuildType != 0) {
         DrawText("LMB: Build, RMB: Cancel", w - 250 * uiScale, h - 50 * uiScale, 16 * uiScale, WHITE);
     }
-    else {
-        DrawText("Click building to Upgrade", w - 250 * uiScale, h - 30 * uiScale, 16 * uiScale, LIGHTGRAY);
-    }
 
     if (GuiButton(Rectangle{ w - 80 * uiScale - padding, padding, 80 * uiScale, 30 * uiScale }, "MENU")) game->ReturnToMenu();
 
-        float barW = 500 * uiScale; if (barW > w * 0.6f) barW = w * 0.6f;
+    float barW = 500 * uiScale; if (barW > w * 0.6f) barW = w * 0.6f;
     float centerX = w / 2.0f; float bottomY = h - padding;
     float xpY = bottomY - 15 * uiScale;
     float xpPct = (myMaxXp > 0) ? (myCurrentXp / myMaxXp) : 0.0f;
@@ -367,10 +463,10 @@ void GameplayScene::DrawGUI() {
     DrawRectangle(centerX - barW / 2 + 2, hpY + 2, (int)((barW - 4) * hpPct), hpBarH - 4, Theme::COLOR_RED);
     char hpTxt[32]; sprintf(hpTxt, "%.0f / %.0f", myHealth, myMaxHealth); DrawText(hpTxt, centerX - MeasureText(hpTxt, 16 * uiScale) / 2, hpY + 2, 16 * uiScale, WHITE);
 
-        float slotSize = 40 * uiScale; float invStartX = centerX - (slotSize * 6 + 25 * uiScale) / 2;
+    float slotSize = 40 * uiScale; float invStartX = centerX - (slotSize * 6 + 25 * uiScale) / 2;
     float invY = hpY - slotSize - (15 * uiScale);
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    invY -= 80 * uiScale;
+    invY -= 40 * uiScale;
 #endif
     for (int i = 0; i < 6; i++) {
         Rectangle slotRect = { invStartX + i * (slotSize + 5 * uiScale), invY, slotSize, slotSize };
@@ -386,6 +482,11 @@ void GameplayScene::DrawGUI() {
             DrawRectangle(slotRect.x + 4, slotRect.y + 4, slotRect.width - 8, slotRect.height - 8, iconColor);
             DrawText(label, slotRect.x + 10 * uiScale, slotRect.y + 5 * uiScale, 24 * uiScale, BLACK);
         }
+    }
+
+    DrawAdminPanel();
+    if (!isAdmin) {
+        if (GuiButton({ 0, 0, 10, 10 }, "")) SendAdminCmd(AdminCmdType::LOGIN, 0);
     }
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)

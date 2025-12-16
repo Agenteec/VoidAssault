@@ -1,44 +1,3 @@
-
-// merged.txt
-
-// reader.py
-import os
-
-def merge_files(root_dir, output_file, extensions=None):
-    """
-    Рекурсивно считывает все файлы из root_dir и записывает в один файл.
-    Перед каждым файлом вставляется комментарий с его путём.
-    extensions — список расширений, если нужно фильтровать (например ['.h', '.cpp'])
-    Если extensions=None — берутся все файлы.
-    """
-    with open(output_file, "w", encoding="utf-8") as out:
-        for folder, _, files in os.walk(root_dir):
-            for file in files:
-                file_path = os.path.join(folder, file)
-                rel_path = os.path.relpath(file_path, root_dir)
-                
-                # Фильтр по расширениям, если нужно
-                if extensions is not None:
-                    _, ext = os.path.splitext(file)
-                    if ext.lower() not in extensions:
-                        continue
-
-                out.write(f"\n// {rel_path}\n")
-
-                try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        out.write(f.read())
-                except Exception as e:
-                    out.write(f"[Ошибка при чтении файла: {e}]\n")
-
-
-if __name__ == "__main__":
-    merge_files(
-        root_dir=".", 
-        output_file="merged.txt",
-        extensions=None 
-    )
-
 // client\AudioManager.h
 ﻿#pragma once
 #include "raylib.h"
@@ -210,17 +169,14 @@ void GameClient::StopHost() {
 	}
 }
 float GameClient::GetUIScale() const {
-	// ВАЖНО: Берем текущие размеры окна, а не закешированные
-	int h = GetScreenHeight();
+		int h = GetScreenHeight();
 	float scale = (float)h / 720.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-	// Для Android делаем интерфейс покрупнее (HUD)
-	scale *= 1.5f;
+		scale *= 1.1f;
 #endif
 
-	if (scale < 0.8f) scale = 0.8f; // Минимальный скейл
-	return scale;
+	if (scale < 0.8f) scale = 0.8f; 	return scale;
 }
 void GameClient::Run() {
 	ChangeScene(std::make_shared<MainMenuScene>(this));
@@ -661,13 +617,12 @@ namespace Theme {
 #include <algorithm>
 #include <string>
 #include <vector>
+#include <cmath>
 
-// Определяем цвета для редкости или типов артефактов
 static const Color COL_INV_EMPTY = { 0, 0, 0, 100 };
 static const Color COL_INV_BORDER = { 150, 150, 150, 200 };
 
 GameplayScene::GameplayScene(GameClient* g) : Scene(g) {
-    // Инициализируем инвентарь пустыми значениями (255 = ArtifactType::EMPTY)
     myInventory.resize(6, 255);
 }
 
@@ -677,34 +632,24 @@ void GameplayScene::Enter() {
     camera.zoom = 1.0f;
     camera.offset = { w / 2, h / 2 };
 
-    // --- СБРОС СТАТОВ ПРИ ВХОДЕ ---
-    // Это решает проблему "кривых" статов при рестарте
     myPlayerId = 0;
     isPredictedInit = false;
     predictedPos = { 0, 0 };
-    predictedRot = 0.0f;
 
     myLevel = 1;
     myCurrentXp = 0.0f;
     myMaxXp = 100.0f;
-    myHealth = 100.0f;
     myMaxHealth = 100.0f;
-    myDamage = 0.0f;
-    mySpeed = 0.0f;
     myScrap = 0;
-    myKills = 0;
+
     currentWave = 1;
+    selectedBuildType = 0;
 
-    // Очищаем инвентарь локально
     std::fill(myInventory.begin(), myInventory.end(), 255);
-
-    // Очищаем кэш сущностей для партиклов
     lastFrameEntityIds.clear();
-
     gunAnimOffset = 0.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    // Настройка джойстиков для мобилок (выше и ближе к центру)
     float joyY = h - 180.0f;
     float joyOffset = 180.0f;
     leftStick = std::make_unique<VirtualJoystick>(Vector2{ joyOffset, joyY }, 50.0f, 100.0f);
@@ -718,10 +663,20 @@ void GameplayScene::Exit() {
     game->StopHost();
 }
 
+void GameplayScene::SendAction(const ActionPacket& act) {
+    if (game->netClient && game->netClient->isConnected()) {
+        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::ACTION);
+        serializer.object(act);
+        serializer.adapter().flush();
+        game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
+}
+
 void GameplayScene::OnMessage(Message::Shared msg) {
     const auto& rawData = msg->stream()->buffer();
     size_t offset = msg->stream()->tellg();
-
     if (rawData.empty() || offset >= rawData.size()) return;
 
     InputAdapter adapter(rawData.begin() + offset, rawData.end());
@@ -733,106 +688,60 @@ void GameplayScene::OnMessage(Message::Shared msg) {
     if (deserializer.adapter().error() != bitsery::ReaderError::NoError) return;
 
     if (packetTypeInt == GamePacket::INIT) {
-        InitPacket pkt;
-        deserializer.object(pkt);
-        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
-            myPlayerId = pkt.playerId;
-            TraceLog(LOG_INFO, "INIT received. ID: %d", myPlayerId);
-        }
+        InitPacket pkt; deserializer.object(pkt);
+        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) myPlayerId = pkt.playerId;
     }
     else if (packetTypeInt == GamePacket::SNAPSHOT) {
-        WorldSnapshotPacket snap;
-        deserializer.object(snap);
-
+        WorldSnapshotPacket snap; deserializer.object(snap);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
-            // Обновляем номер волны
             currentWave = snap.wave;
-
-            // --- Партиклы (детектор смертей) ---
-            std::vector<uint32_t> currentIds;
-            for (const auto& ent : snap.entities) currentIds.push_back(ent.id);
-
-            if (!lastFrameEntityIds.empty() && !snapshotManager.history.empty()) {
-                const auto& lastSnapEntities = snapshotManager.history.back().entities;
-                for (uint32_t oldId : lastFrameEntityIds) {
-                    bool stillExists = false;
-                    for (uint32_t newId : currentIds) { if (newId == oldId) { stillExists = true; break; } }
-
-                    if (!stillExists && oldId != myPlayerId) {
-                        for (const auto& e : lastSnapEntities) {
-                            if (e.id == oldId) {
-                                Color pCol = (e.type == EntityType::ENEMY) ? Theme::COLOR_RED : Theme::COLOR_BLUE;
-                                if (e.type == EntityType::BULLET) pCol = GRAY;
-
-                                int count = (e.type == EntityType::BULLET) ? 4 : 15;
-                                float size = (e.type == EntityType::BULLET) ? 3.0f : 6.0f;
-                                if (e.type == EntityType::ENEMY && e.subtype == EnemyType::BOSS) {
-                                    count = 60; size = 10.0f;
-                                }
-
-                                particles.SpawnExplosion(e.position, count, pCol);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            lastFrameEntityIds = currentIds;
-            // -----------------------------------
-
             snapshotManager.PushSnapshot(snap);
             lastServerTime = snap.serverTime;
-
-            // Синхронизация своего положения (для коррекции предикта)
             for (const auto& ent : snap.entities) {
                 if (ent.id == myPlayerId) {
                     if (!isPredictedInit) {
                         predictedPos = ent.position;
-                        predictedRot = ent.rotation;
                         isPredictedInit = true;
                     }
                     else {
                         float dist = Vector2Distance(predictedPos, ent.position);
-                        if (dist > 150.0f) predictedPos = ent.position; // Телепорт при большом лаге
+                        if (dist > 150.0f) predictedPos = ent.position;
                         else predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
                     }
-                    myHealth = ent.health; // HP обновляем сразу из снепшота для плавности
+                    myHealth = ent.health;
                     break;
                 }
             }
         }
     }
     else if (packetTypeInt == GamePacket::STATS) {
-        PlayerStatsPacket stats;
-        deserializer.object(stats);
+        PlayerStatsPacket stats; deserializer.object(stats);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             myLevel = stats.level;
             myCurrentXp = stats.currentXp;
             myMaxXp = stats.maxXp;
-            // myHealth обновляем из snapshot чаще, но maxHealth отсюда
             myMaxHealth = stats.maxHealth;
             myDamage = stats.damage;
             mySpeed = stats.speed;
             myScrap = stats.scrap;
             myKills = stats.kills;
-
-            // Обновляем инвентарь
-            if (stats.inventory.size() == 6) {
-                myInventory = stats.inventory;
-            }
+                        if (stats.inventory.size() == 6) myInventory = stats.inventory;
+        }
+    }
+    else if (packetTypeInt == GamePacket::EVENT) {
+        EventPacket evt; deserializer.object(evt);
+        if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
+            if (evt.type == 0) particles.SpawnExplosion(evt.pos, 4, evt.color);
+            else if (evt.type == 1) particles.SpawnExplosion(evt.pos, 20, evt.color);
+            else if (evt.type == 2) particles.SpawnExplosion(evt.pos, 10, evt.color);
         }
     }
 }
 
 void GameplayScene::Update(float dt) {
-    if (gunAnimOffset > 0.0f) {
-        gunAnimOffset -= dt * 60.0f;
-        if (gunAnimOffset < 0.0f) gunAnimOffset = 0.0f;
-    }
-
+    if (gunAnimOffset > 0.0f) gunAnimOffset -= dt * 60.0f;
     particles.Update(dt);
 
-    // Интерполяция времени
     clientTime += dt;
     if (abs(clientTime - lastServerTime) > 2.0) clientTime = lastServerTime;
     else clientTime = Lerp((float)clientTime, (float)lastServerTime, 0.05f);
@@ -843,99 +752,91 @@ void GameplayScene::Update(float dt) {
     pkt.isShooting = false;
 
     float currentSpeed = (mySpeed > 0) ? mySpeed : 220.0f;
-    const float MAP_SIZE = 4000.0f; // Размер карты как на сервере
+    const float MAP_SIZE = 4000.0f;
     float myRadius = 20.0f + (myLevel - 1) * 2.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     if (leftStick && rightStick) {
-        leftStick->Update();
-        rightStick->Update();
+        leftStick->Update(); rightStick->Update();
         pkt.movement = leftStick->GetAxis();
-
         Vector2 aimDir = rightStick->GetAxis();
         if (Vector2Length(aimDir) > 0.1f) {
             pkt.isShooting = true;
             pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(aimDir, 300.0f));
             predictedRot = atan2f(aimDir.y, aimDir.x) * RAD2DEG;
         }
-        else {
-            if (Vector2Length(pkt.movement) > 0.1f) {
-                predictedRot = atan2f(pkt.movement.y, pkt.movement.x) * RAD2DEG;
-                pkt.aimTarget = Vector2Add(predictedPos, Vector2Scale(pkt.movement, 300.0f));
-            }
-            else {
-                pkt.aimTarget = Vector2Add(predictedPos, { 300, 0 });
-            }
-        }
+        else pkt.aimTarget = Vector2Add(predictedPos, { 300, 0 });
     }
 #else
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
     if (IsKeyDown(KEY_D)) pkt.movement.x += 1.0f;
-
     if (Vector2Length(pkt.movement) > 1.0f) pkt.movement = Vector2Normalize(pkt.movement);
 
     pkt.aimTarget = GetScreenToWorld2D(GetMousePosition(), camera);
-    pkt.isShooting = IsMouseButtonDown(MOUSE_LEFT_BUTTON);
+
+        if (IsMouseButtonPressed(MOUSE_LEFT_BUTTON)) {
+        if (selectedBuildType != 0) {
+            ActionPacket act;
+            act.type = selectedBuildType;
+            act.target = pkt.aimTarget;             SendAction(act);
+            if (!IsKeyDown(KEY_LEFT_SHIFT)) selectedBuildType = 0;
+        }
+        else {
+                        ActionPacket act;
+            act.type = ActionType::UPGRADE_BUILDING;
+            act.target = pkt.aimTarget;
+            SendAction(act);
+        }
+    }
+
+    if (IsMouseButtonDown(MOUSE_LEFT_BUTTON) && selectedBuildType == 0) {
+        pkt.isShooting = true;
+    }
+
+        if (IsMouseButtonPressed(MOUSE_RIGHT_BUTTON)) selectedBuildType = 0;
 
     Vector2 diff = Vector2Subtract(pkt.aimTarget, predictedPos);
     predictedRot = atan2f(diff.y, diff.x) * RAD2DEG;
 #endif
 
-    if (pkt.isShooting && gunAnimOffset <= 1.0f) {
-        gunAnimOffset = 12.0f;
-    }
+    if (pkt.isShooting && gunAnimOffset <= 1.0f) gunAnimOffset = 12.0f;
 
     if (isPredictedInit) {
         Vector2 velocity = Vector2Scale(pkt.movement, currentSpeed * dt);
         Vector2 nextPos = Vector2Add(predictedPos, velocity);
-
-        // Клиентская коллизия со стенами
         if (nextPos.x < myRadius) nextPos.x = myRadius;
         if (nextPos.y < myRadius) nextPos.y = myRadius;
         if (nextPos.x > MAP_SIZE - myRadius) nextPos.x = MAP_SIZE - myRadius;
         if (nextPos.y > MAP_SIZE - myRadius) nextPos.y = MAP_SIZE - myRadius;
-
         predictedPos = nextPos;
+        camera.target = Vector2Lerp(camera.target, predictedPos, 0.1f);
     }
 
     if (game->netClient && game->netClient->isConnected()) {
-        Buffer buffer;
-        OutputAdapter adapter(buffer);
-        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-        serializer.value1b(GamePacket::INPUT);
-        serializer.object(pkt);
-        serializer.adapter().flush();
+        Buffer buffer; OutputAdapter adapter(buffer); bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::INPUT); serializer.object(pkt); serializer.adapter().flush();
         game->netClient->send(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
-    }
-
-    if (isPredictedInit) {
-        camera.target = Vector2Lerp(camera.target, predictedPos, 0.1f);
     }
 }
 
 void GameplayScene::Draw() {
     BeginMode2D(camera);
     ClearBackground(Theme::COL_BACKGROUND);
-
     int gridW = 4000; int gridH = 4000;
-
-    // Сетка
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
-    for (int i = 0; i <= gridW; i += 100) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.4f));
-    for (int i = 0; i <= gridH; i += 100) DrawLine(0, i, gridW, i, Fade(Theme::COL_GRID, 0.4f));
 
-    // Лямбда для рисования танка
+        for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.3f));
+    for (int i = 0; i <= gridH; i += 50) DrawLine(0, i, gridW, i, Fade(Theme::COL_GRID, 0.3f));
+
     auto DrawDiepTank = [&](Vector2 pos, float rot, Color mainCol, float radius, float hp, float maxHp, bool isMe) {
         Color outlineCol = { 85, 85, 85, 255 };
         float outlineThick = 3.0f;
-
         Vector2 dir = { cosf(rot * DEG2RAD), sinf(rot * DEG2RAD) };
         float baseLen = radius * 1.8f;
         float currentLen = isMe ? (baseLen - gunAnimOffset) : baseLen;
         float barrelWidth = radius * 0.8f;
-
         Vector2 bStart = pos;
         Vector2 bEnd = Vector2Add(pos, Vector2Scale(dir, currentLen));
         Vector2 perp = { -dir.y, dir.x };
@@ -943,234 +844,165 @@ void GameplayScene::Draw() {
         Vector2 c2 = Vector2Subtract(bStart, Vector2Scale(perp, barrelWidth * 0.5f));
         Vector2 c3 = Vector2Subtract(bEnd, Vector2Scale(perp, barrelWidth * 0.5f));
         Vector2 c4 = Vector2Add(bEnd, Vector2Scale(perp, barrelWidth * 0.5f));
-
-        DrawLineEx(c1, c4, outlineThick * 2, outlineCol);
-        DrawLineEx(c2, c3, outlineThick * 2, outlineCol);
-        DrawLineEx(c4, c3, outlineThick * 2, outlineCol);
-        DrawTriangle(c1, c2, c4, LIGHTGRAY);
-        DrawTriangle(c2, c3, c4, LIGHTGRAY);
-
-        if (isMe && gunAnimOffset > 8.0f) {
-            Vector2 flashPos = Vector2Add(bEnd, Vector2Scale(dir, 10.0f));
-            DrawCircleV(flashPos, radius * 0.7f, Fade(WHITE, 0.8f));
-        }
-
+        DrawLineEx(c1, c4, outlineThick * 2, outlineCol); DrawLineEx(c2, c3, outlineThick * 2, outlineCol); DrawLineEx(c4, c3, outlineThick * 2, outlineCol);
+        DrawTriangle(c1, c2, c4, LIGHTGRAY); DrawTriangle(c2, c3, c4, LIGHTGRAY);
         DrawCircleV(pos, radius + (outlineThick / 2.0f), outlineCol);
         DrawCircleV(pos, radius, mainCol);
         };
-
-    if (isPredictedInit) {
-        float myRadius = 20.0f + (myLevel - 1) * 2.0f;
-        DrawDiepTank(predictedPos, predictedRot, Theme::COL_ACCENT, myRadius, myHealth, myMaxHealth, true);
-    }
-
-    // Рисуем частицы (под сущностями или над фоном)
-    particles.Draw();
 
     if (!snapshotManager.history.empty()) {
         double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
         const auto& latestEntities = snapshotManager.history.back().entities;
 
         for (const auto& ent : latestEntities) {
-            if (ent.id == myPlayerId) continue;
-
             EntityState renderState;
-            if (snapshotManager.GetInterpolatedState(ent.id, renderTime, renderState)) {
+            if (!snapshotManager.GetInterpolatedState(ent.id, renderTime, renderState)) renderState = ent;
 
-                if (renderState.type == EntityType::PLAYER) {
-                    float otherRadius = 20.0f + (renderState.level - 1) * 2.0f;
-                    DrawDiepTank(renderState.position, renderState.rotation, Theme::COLOR_RED, otherRadius, renderState.health, renderState.maxHealth, false);
+            if (ent.id == myPlayerId && isPredictedInit) {
+                float myRadius = 20.0f + (myLevel - 1) * 2.0f;
+                DrawDiepTank(predictedPos, predictedRot, Theme::COL_ACCENT, myRadius, myHealth, myMaxHealth, true);
+                continue;
+            }
+
+            if (renderState.type == EntityType::PLAYER) {
+                float otherRadius = 20.0f + (renderState.level - 1) * 2.0f;
+                DrawDiepTank(renderState.position, renderState.rotation, Theme::COLOR_RED, otherRadius, renderState.health, renderState.maxHealth, false);
+            }
+            else if (renderState.type == EntityType::BULLET) {
+                DrawCircleV(renderState.position, renderState.radius + 1.5f, { 85, 85, 85, 255 });
+                DrawCircleV(renderState.position, renderState.radius, Theme::COLOR_RED);
+            }
+            else if (renderState.type == EntityType::ENEMY) {
+                float radius = renderState.radius; Vector2 pos = renderState.position; float rot = renderState.rotation + 90.0f;
+                Color enemyColor = Theme::COLOR_RED; int sides = 3;
+                switch (renderState.subtype) {
+                case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break;
+                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;
+                case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 5; break;
                 }
-                else if (renderState.type == EntityType::BULLET) {
-                    DrawCircleV(renderState.position, renderState.radius + 1.5f, { 85, 85, 85, 255 });
-                    DrawCircleV(renderState.position, renderState.radius, Theme::COLOR_RED);
+                DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 }); DrawPoly(pos, sides, radius, rot, enemyColor);
+                float hpPct = renderState.health / renderState.maxHealth;
+                if (hpPct < 0.99f) {
+                    DrawRectangle((int)pos.x - 20, (int)pos.y + (int)radius + 10, 40, 6, { 50,50,50,200 });
+                    DrawRectangle((int)pos.x - 19, (int)pos.y + (int)radius + 11, (int)(38 * hpPct), 4, GREEN);
                 }
-                else if (renderState.type == EntityType::ENEMY) {
-                    float radius = renderState.radius;
-                    Vector2 pos = renderState.position;
-                    // +90 градусов для корректной ориентации DrawPoly (0 = вверх)
-                    float rot = renderState.rotation + 90.0f;
-
-                    Color enemyColor = Theme::COLOR_RED;
-                    int sides = 3;
-
-                    switch (renderState.subtype) {
-                    case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break; // Розовый
-                    case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break; // Квадрат
-                    case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 5; break; // Пентагон
-                    }
-
-                    DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 });
-                    DrawPoly(pos, sides, radius, rot, enemyColor);
-
-                    // HP Bar Enemy
-                    float hpPct = renderState.health / renderState.maxHealth;
-                    if (hpPct < 0.99f) {
-                        DrawRectangle((int)pos.x - 20, (int)pos.y + (int)radius + 10, 40, 6, { 50,50,50,200 });
-                        DrawRectangle((int)pos.x - 19, (int)pos.y + (int)radius + 11, (int)(38 * hpPct), 4, GREEN);
-                    }
+            }
+            else if (renderState.type == EntityType::ARTIFACT) {
+                float rot = (float)GetTime() * 100.0f;
+                DrawPoly(renderState.position, 6, 16.0f, rot, { 85, 85, 85, 255 }); DrawPoly(renderState.position, 6, 13.0f, rot, ORANGE);
+            }
+            else if (renderState.type == EntityType::WALL) {
+                Rectangle r = { renderState.position.x - 25, renderState.position.y - 25, 50, 50 };
+                DrawRectangleRec(r, GRAY); DrawRectangleLinesEx(r, 2, DARKGRAY);
+                float hpPct = renderState.health / renderState.maxHealth;
+                if (hpPct < 1.0f) {
+                    DrawRectangle(r.x, r.y - 8, 50, 4, RED); DrawRectangle(r.x, r.y - 8, 50 * hpPct, 4, GREEN);
                 }
-                else if (renderState.type == EntityType::ARTIFACT) {
-                    float rot = (float)GetTime() * 100.0f;
-                    DrawPoly(renderState.position, 6, 16.0f, rot, { 85, 85, 85, 255 });
-                    DrawPoly(renderState.position, 6, 13.0f, rot, ORANGE);
+            }
+            else if (renderState.type == EntityType::TURRET) {
+                DrawCircleV(renderState.position, 20, PURPLE); DrawCircleLines(renderState.position.x, renderState.position.y, 20, BLACK);
+                DrawCircleV(renderState.position, 8, DARKPURPLE);
+                float hpPct = renderState.health / renderState.maxHealth;
+                if (hpPct < 1.0f) {
+                    DrawRectangle(renderState.position.x - 20, renderState.position.y - 30, 40, 4, RED);
+                    DrawRectangle(renderState.position.x - 20, renderState.position.y - 30, 40 * hpPct, 4, GREEN);
                 }
+            }
+            else if (renderState.type == EntityType::MINE) {
+                DrawCircleV(renderState.position, 15, Fade(ORANGE, 0.5f)); DrawCircleLines(renderState.position.x, renderState.position.y, 15, RED);
             }
         }
     }
 
+        if (selectedBuildType > 0) {
+        Vector2 mPos = GetScreenToWorld2D(GetMousePosition(), camera);
+
+                float gridX = roundf(mPos.x / 50.0f) * 50.0f;
+        float gridY = roundf(mPos.y / 50.0f) * 50.0f;
+        Vector2 snapPos = { gridX, gridY };
+
+        Color ghostCol = Fade(GREEN, 0.5f);
+        if (Vector2Distance(predictedPos, snapPos) > 400.0f) ghostCol = Fade(RED, 0.5f);
+
+        if (selectedBuildType == ActionType::BUILD_WALL) DrawRectangle(snapPos.x - 25, snapPos.y - 25, 50, 50, ghostCol);
+        else if (selectedBuildType == ActionType::BUILD_TURRET) DrawCircleV(snapPos, 20, ghostCol);
+        else if (selectedBuildType == ActionType::BUILD_MINE) DrawCircleV(snapPos, 15, ghostCol);
+    }
+
+    particles.Draw();
     EndMode2D();
 }
 
-// Структура для сортировки
-struct LeaderboardEntry {
-    uint32_t id;
-    uint32_t level;
-    uint32_t kills;
-    bool isMe;
-};
-
 void GameplayScene::DrawGUI() {
-    int w = GetScreenWidth();
-    int h = GetScreenHeight();
-    float uiScale = game->GetUIScale();
-    GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale));
+    int w = GetScreenWidth(); int h = GetScreenHeight(); float uiScale = game->GetUIScale();
+    GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale)); float padding = 20 * uiScale;
 
-    float padding = 20 * uiScale;
+        DrawText(TextFormat("Scrap: %d", myScrap), padding, padding, 20 * uiScale, GOLD);
+    char waveText[32]; sprintf(waveText, "WAVE %d", currentWave);
+    DrawText(waveText, (w - MeasureText(waveText, 30 * uiScale)) / 2, padding, 30 * uiScale, Theme::COL_ACCENT);
 
-    // --- 1. TOP LEFT: STATS ---
-    float tlX = padding;
-    float tlY = padding;
-    char statsText[256];
-    sprintf(statsText, "Scrap: %d\nDmg: %.1f\nSpd: %.0f", myScrap, myDamage, mySpeed);
-    DrawText(statsText, tlX, tlY, 20 * uiScale, GOLD);
-
-    // --- 2. TOP CENTER: WAVE ---
-    char waveText[32];
-    sprintf(waveText, "WAVE %d", currentWave);
-    int waveFontSize = 30 * uiScale;
-    int waveW = MeasureText(waveText, waveFontSize);
-    DrawText(waveText, (w - waveW) / 2, padding, waveFontSize, Theme::COL_ACCENT);
-
-    // --- 3. TOP RIGHT: MENU & LEADERBOARD ---
-    float btnW = 80 * uiScale;
-    float btnH = 30 * uiScale;
-    if (GuiButton(Rectangle{ w - btnW - padding, padding, btnW, btnH }, "MENU")) {
-        game->ReturnToMenu();
+        const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
+    int costs[] = { 10, 50, 25 };
+    float bY = h - 200 * uiScale;
+    for (int i = 0; i < 3; i++) {
+        Rectangle bRect = { w - 130 * uiScale, bY + i * (45 * uiScale), 110 * uiScale, 40 * uiScale };
+        int type = i + 1;
+        if (myScrap >= costs[i]) {
+            if (GuiButton(bRect, builds[i])) selectedBuildType = (selectedBuildType == type) ? 0 : type;
+        }
+        else {
+            GuiDisable(); GuiButton(bRect, builds[i]); GuiEnable();
+        }
+        if (selectedBuildType == type) DrawRectangleLinesEx(bRect, 2, GREEN);
     }
 
-    // Лидерборд
-    if (!snapshotManager.history.empty()) {
-        std::vector<LeaderboardEntry> lb;
-        // Добавляем себя (данные из локальных статов самые свежие)
-        lb.push_back({ myPlayerId, myLevel, myKills, true });
-
-        // Добавляем других
-        const auto& ents = snapshotManager.history.back().entities;
-        for (const auto& e : ents) {
-            if (e.type == EntityType::PLAYER && e.id != myPlayerId) {
-                lb.push_back({ e.id, e.level, e.kills, false });
-            }
-        }
-
-        // Сортируем
-        std::sort(lb.begin(), lb.end(), [](const LeaderboardEntry& a, const LeaderboardEntry& b) {
-            if (a.level != b.level) return a.level > b.level;
-            return a.kills > b.kills;
-            });
-
-        float lbW = 200 * uiScale;
-        float lbX = w - lbW - padding;
-        float lbY = padding + btnH + 10 * uiScale;
-
-        DrawRectangleRounded({ lbX, lbY, lbW, 140 * uiScale }, 0.1f, 4, Fade(BLACK, 0.3f));
-
-        DrawText("LEADERBOARD", lbX + 10 * uiScale, lbY + 5 * uiScale, 16 * uiScale, WHITE);
-        float rowY = lbY + 25 * uiScale;
-
-        for (size_t i = 0; i < lb.size() && i < 5; i++) {
-            std::string s = std::to_string(i + 1) + ". L" + std::to_string(lb[i].level) + " (" + std::to_string(lb[i].kills) + ")";
-            if (lb[i].isMe) s += " YOU";
-            DrawText(s.c_str(), lbX + 10 * uiScale, rowY, 16 * uiScale, lb[i].isMe ? GOLD : LIGHTGRAY);
-            rowY += 18 * uiScale;
-        }
+    if (selectedBuildType != 0) {
+        DrawText("LMB: Build, RMB: Cancel", w - 250 * uiScale, h - 50 * uiScale, 16 * uiScale, WHITE);
+    }
+    else {
+        DrawText("Click building to Upgrade", w - 250 * uiScale, h - 30 * uiScale, 16 * uiScale, LIGHTGRAY);
     }
 
-    // --- 4. BOTTOM CENTER: HUD (BARS & INVENTORY) ---
-    float barW = 500 * uiScale;
-    if (barW > w * 0.6f) barW = w * 0.6f;
-    float barH = 15 * uiScale; // Высота полоски XP
+    if (GuiButton(Rectangle{ w - 80 * uiScale - padding, padding, 80 * uiScale, 30 * uiScale }, "MENU")) game->ReturnToMenu();
 
-    float centerX = w / 2.0f;
-    float bottomY = h - padding;
-
-    // XP Bar (самый низ)
-    float xpY = bottomY - barH;
+        float barW = 500 * uiScale; if (barW > w * 0.6f) barW = w * 0.6f;
+    float centerX = w / 2.0f; float bottomY = h - padding;
+    float xpY = bottomY - 15 * uiScale;
     float xpPct = (myMaxXp > 0) ? (myCurrentXp / myMaxXp) : 0.0f;
-    DrawRectangle(centerX - barW / 2, xpY, barW, barH, Fade(BLACK, 0.6f));
-    DrawRectangle(centerX - barW / 2 + 2, xpY + 2, (int)((barW - 4) * xpPct), barH - 4, { 255, 232, 105, 255 }); // Желтый
+    DrawRectangle(centerX - barW / 2, xpY, barW, 15 * uiScale, Fade(BLACK, 0.6f));
+    DrawRectangle(centerX - barW / 2 + 2, xpY + 2, (int)((barW - 4) * xpPct), 15 * uiScale - 4, { 255, 232, 105, 255 });
+    char lvlTxt[32]; sprintf(lvlTxt, "Lvl %d", myLevel); DrawText(lvlTxt, centerX - MeasureText(lvlTxt, 14 * uiScale) / 2, xpY, 14 * uiScale, BLACK);
 
-    char lvlTxt[32]; sprintf(lvlTxt, "Level %d", myLevel);
-    int lvlW = MeasureText(lvlTxt, 14 * uiScale);
-    DrawText(lvlTxt, centerX - lvlW / 2, xpY + 1, 14 * uiScale, BLACK);
-
-    // HP Bar (над XP)
-    float hpBarH = 22 * uiScale;
-    float hpY = xpY - hpBarH - (5 * uiScale);
+    float hpBarH = 22 * uiScale; float hpY = xpY - hpBarH - (5 * uiScale);
     float hpPct = (myMaxHealth > 0) ? (myHealth / myMaxHealth) : 0.0f;
     DrawRectangle(centerX - barW / 2, hpY, barW, hpBarH, Fade(BLACK, 0.6f));
     DrawRectangle(centerX - barW / 2 + 2, hpY + 2, (int)((barW - 4) * hpPct), hpBarH - 4, Theme::COLOR_RED);
+    char hpTxt[32]; sprintf(hpTxt, "%.0f / %.0f", myHealth, myMaxHealth); DrawText(hpTxt, centerX - MeasureText(hpTxt, 16 * uiScale) / 2, hpY + 2, 16 * uiScale, WHITE);
 
-    char hpTxt[32]; sprintf(hpTxt, "%.0f / %.0f", myHealth, myMaxHealth);
-    int hpTxtW = MeasureText(hpTxt, 16 * uiScale);
-    DrawText(hpTxt, centerX - hpTxtW / 2, hpY + 3 * uiScale, 16 * uiScale, WHITE);
-
-    // Инвентарь (над HP)
-    // Рисуем 6 ячеек
-    float slotSize = 40 * uiScale;
-    float slotGap = 5 * uiScale;
-    float invTotalW = (slotSize * 6) + (slotGap * 5);
-    float invStartX = centerX - invTotalW / 2;
+        float slotSize = 40 * uiScale; float invStartX = centerX - (slotSize * 6 + 25 * uiScale) / 2;
     float invY = hpY - slotSize - (15 * uiScale);
-
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    // На мобилке поднимаем выше, чтобы не перекрывалось пальцами на джойстиках
     invY -= 80 * uiScale;
 #endif
-
     for (int i = 0; i < 6; i++) {
-        Rectangle slotRect = { invStartX + i * (slotSize + slotGap), invY, slotSize, slotSize };
-        DrawRectangleRec(slotRect, COL_INV_EMPTY);
-        DrawRectangleLinesEx(slotRect, 2, COL_INV_BORDER);
-
+        Rectangle slotRect = { invStartX + i * (slotSize + 5 * uiScale), invY, slotSize, slotSize };
+        DrawRectangleRec(slotRect, COL_INV_EMPTY); DrawRectangleLinesEx(slotRect, 2, COL_INV_BORDER);
         if (i < myInventory.size() && myInventory[i] != 255) {
-            // Отрисовка иконки артефакта
-            Color iconColor = WHITE;
-            const char* label = "?";
+            Color iconColor = WHITE; const char* label = "?";
             switch (myInventory[i]) {
-            case 0: iconColor = { 255, 100, 100, 255 }; label = "D"; break; // Damage
-            case 1: iconColor = { 100, 100, 255, 255 }; label = "S"; break; // Speed
-            case 2: iconColor = { 100, 255, 100, 255 }; label = "H"; break; // Health
-            case 3: iconColor = { 255, 255, 100, 255 }; label = "R"; break; // Reload
+            case 0: iconColor = { 255, 100, 100, 255 }; label = "D"; break;
+            case 1: iconColor = { 100, 100, 255, 255 }; label = "S"; break;
+            case 2: iconColor = { 100, 255, 100, 255 }; label = "H"; break;
+            case 3: iconColor = { 255, 255, 100, 255 }; label = "R"; break;
             }
-            // Мини-иконка
             DrawRectangle(slotRect.x + 4, slotRect.y + 4, slotRect.width - 8, slotRect.height - 8, iconColor);
             DrawText(label, slotRect.x + 10 * uiScale, slotRect.y + 5 * uiScale, 24 * uiScale, BLACK);
         }
     }
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    if (leftStick) leftStick->Draw();
-    if (rightStick) rightStick->Draw();
+    if (leftStick) leftStick->Draw(); if (rightStick) rightStick->Draw();
 #endif
-
-    if (game->netClient && !game->netClient->isConnected()) {
-        const char* txt = "Connection lost...";
-        DrawText(txt, w / 2 - MeasureText(txt, 30 * uiScale) / 2, h / 2, 30 * uiScale, Theme::COL_WARNING);
-    }
-    else {
-        DrawFPS(10, 10);
-    }
 }
 // client\scenes\GameplayScene.h
 ﻿#pragma once
@@ -1178,7 +1010,7 @@ void GameplayScene::DrawGUI() {
 #include "../../common/NetworkPackets.h"
 #include "SnapshotManager.h"
 #include "../vircontrols/VirtualJoystick.h"
-#include "../ParticleSystem.h" // Подключаем партиклы
+#include "../ParticleSystem.h"
 #include <memory>
 #include <vector>
 #include "Theme.h"
@@ -1188,7 +1020,7 @@ class GameplayScene : public Scene {
     Camera2D camera = { 0 };
 
     SnapshotManager snapshotManager;
-    ParticleSystem particles; // Система частиц
+    ParticleSystem particles;
 
     double clientTime = 0.0;
     double lastServerTime = 0.0;
@@ -1200,20 +1032,20 @@ class GameplayScene : public Scene {
     bool isPredictedInit = false;
 
     float gunAnimOffset = 0.0f;
-    uint32_t myLevel = 1;
+    
+        uint32_t myLevel = 1;
     float myCurrentXp = 0.0f;
     float myMaxXp = 100.0f;
     float myHealth = 100.0f;
     float myMaxHealth = 100.0f;
     float myDamage = 0.0f;
     float mySpeed = 0.0f;
-
     uint32_t myScrap = 0;
     uint32_t myKills = 0;
     uint32_t currentWave = 1;
+    
+        int selectedBuildType = 0; 
     std::vector<uint8_t> myInventory{255,255,255,255,255,255};
-
-    // Для определения исчезновения врагов (смерти)
     std::vector<uint32_t> lastFrameEntityIds;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
@@ -1229,6 +1061,7 @@ public:
     void Exit() override;
 
     void OnMessage(Message::Shared msg) override;
+    void SendAction(const ActionPacket& act);
 
     void Update(float dt) override;
     void Draw() override;
@@ -1326,7 +1159,7 @@ void MainMenuScene::DrawGUI() {
         float panelY = (h - panelH) / 2.0f + (h * 0.05f);
 
         Rectangle menuRect = { cx - panelW / 2, panelY, panelW, panelH };
-        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.4(15.12.2025)", font);
+        ResourceManager::DrawSciFiPanel(menuRect, "Alpha 0.5(16.12.2025)", font);
         float currentY = panelY + panelPadding;
 
         if (GuiButton({ cx - btnW / 2, currentY, btnW, btnH }, ConfigManager::Text("btn_singleplayer"))) {
@@ -2109,32 +1942,66 @@ typename T::mapped_type get(T const& map, typename T::key_type const& key)
     return iter != map.end() ? iter->second : typename T::mapped_type();
 }
 // common\NetworkPackets.h
-﻿#pragma once
+﻿// common/NetworkPackets.h
+#pragma once
 #include "PacketSerialization.h"
 #include "raylib.h"
 #include <cstdint>
 #include <vector>
-
 namespace GamePacket {
     enum Type : uint8_t {
         INPUT = 1,
         INIT,
         SNAPSHOT,
         EVENT,
-        STATS
+        STATS,
+        ACTION
     };
 }
 
-enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT };
+namespace ActionType {
+    enum : uint8_t {
+        BUILD_WALL = 1,
+        BUILD_TURRET,
+        BUILD_MINE,
+        UPGRADE_BUILDING // NEW: Улучшение постройки
+    };
+}
+
+// Типы сущностей
+enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT, WALL, TURRET, MINE };
 
 namespace EnemyType {
     enum : uint8_t { BASIC = 0, FAST, TANK, BOSS };
 }
 
-// Типы артефактов
 namespace ArtifactType {
     enum : uint8_t { DAMAGE = 0, SPEED, HEALTH, RELOAD, EMPTY = 255 };
 }
+
+struct EventPacket {
+    uint8_t type;
+    Vector2 pos;
+    Color color;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value1b(type);
+        s.object(pos);
+        s.object(color);
+    }
+};
+
+struct ActionPacket {
+    uint8_t type;       // ActionType
+    Vector2 target;     // Координаты клика (для стройки или улучшения)
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value1b(type);
+        s.object(target);
+    }
+};
 
 struct PlayerStatsPacket {
     uint32_t level;
@@ -2146,7 +2013,7 @@ struct PlayerStatsPacket {
     uint32_t scrap;
     uint32_t kills;
 
-    // Инвентарь: 6 слотов, храним ID типа артефакта
+    // Инвентарь
     std::vector<uint8_t> inventory;
 
     template <typename S>
@@ -2159,9 +2026,26 @@ struct PlayerStatsPacket {
         s.value4b(speed);
         s.value4b(scrap);
         s.value4b(kills);
-        s.container1b(inventory, 6); // Сериализуем вектор как байты
+        s.container1b(inventory, 6);
     }
 };
+
+
+// NEW: Типы характеристик
+namespace StatType {
+    enum : uint8_t {
+        HEALTH_REGEN = 0,
+        MAX_HEALTH,
+        BODY_DAMAGE,
+        BULLET_SPEED,
+        BULLET_PEN,
+        BULLET_DAMAGE,
+        RELOAD,
+        MOVE_SPEED,
+        COUNT // 8 stats
+    };
+}
+
 
 struct PlayerInputPacket {
     Vector2 movement;
@@ -2209,7 +2093,7 @@ struct EntityState {
 
 struct WorldSnapshotPacket {
     double serverTime;
-    uint32_t wave; // Текущая волна
+    uint32_t wave;
     std::vector<EntityState> entities;
 
     template <typename S>
@@ -3781,7 +3665,7 @@ std::string format(std::time_t);
     ServerHost.h
  "ServerHost.h"
  ServerHost.cpp
- "Utils/ConfigManager.h" "ECS/PhysicsUtils.h" "ECS/Enemy.h" "ECS/Artifact.h")
+ "Utils/ConfigManager.h" "ECS/PhysicsUtils.h" "ECS/Enemy.h" "ECS/Artifact.h" "ECS/Construct.h")
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${BITSTERY_EXTERNAL_INCLUDE_DIR})
@@ -3871,10 +3755,9 @@ void ServerHost::ServerLoop() {
     double snapshotTimer = 0.0;
     double statsTimer = 0.0;
 
-    // Сброс волн при старте
     waveCount = 1;
     waveTimer = 0.0;
-    timeToNextWave = 5.0; // Первая волна через 5 секунд
+    timeToNextWave = 5.0;
 
     while (running && netServer->isRunning()) {
         auto currentTime = clock::now();
@@ -3883,17 +3766,13 @@ void ServerHost::ServerLoop() {
 
         if (frameTime > 0.25) frameTime = 0.25;
 
-        // --- ЛОГИКА "СНА" СЕРВЕРА ---
-        if (netServer->numClients() == 0) {
-            // Если сервер опустел, но на нем есть активность (волны > 1 или мобы) - сбрасываем
+                if (netServer->numClients() == 0) {
             bool hasEntities = false;
             for (auto& pair : gameScene.objects) {
-                if (pair.second->type != EntityType::PLAYER) { hasEntities = true; break; }
+                if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) { hasEntities = true; break; }
             }
 
             if (waveCount > 1 || hasEntities) {
-                std::cout << "SERVER: Empty. Resetting game world..." << std::endl;
-                // Удаляем всех кроме игроков (игроков там и так нет, но для безопасности)
                 auto it = gameScene.objects.begin();
                 while (it != gameScene.objects.end()) {
                     if (it->second->type == EntityType::ENEMY ||
@@ -3909,14 +3788,10 @@ void ServerHost::ServerLoop() {
                 waveTimer = 0;
                 timeToNextWave = 5.0;
             }
-
-            // Небольшая задержка, чтобы не грузить ЦП в холостую
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            // Продолжаем поллинг сети, чтобы принять новых игроков, но не обновляем физику
             auto msgs = netServer->poll();
             for (auto& msg : msgs) {
                 if (msg->type() == MessageType::CONNECT) {
-                    // Обработка первого подключения (копия кода ниже)
                     uint32_t peerId = msg->peerId();
                     std::cout << "Client " << peerId << " connected (waking up).\n";
                     auto player = gameScene.CreatePlayerWithId(peerId);
@@ -3928,25 +3803,22 @@ void ServerHost::ServerLoop() {
             }
             continue;
         }
-        // -----------------------------
 
         accumulator += frameTime;
         snapshotTimer += frameTime;
         statsTimer += frameTime;
 
-        // --- ЛОГИКА ВОЛН ---
-        waveTimer += frameTime;
+                waveTimer += frameTime;
         if (waveTimer >= timeToNextWave) {
             waveTimer = 0.0;
-            timeToNextWave = 15.0; // Интервал между волнами
+            timeToNextWave = 15.0;
 
-            // Ограничение врагов
             int currentEnemies = 0;
             for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
 
-            if (currentEnemies < 80) { // Лимит 80 врагов
+            if (currentEnemies < 80) {
                 int enemiesToSpawn = 3 + waveCount;
-                if (enemiesToSpawn > 25) enemiesToSpawn = 25;
+                if (enemiesToSpawn > 30) enemiesToSpawn = 30;
 
                 std::cout << "SERVER: Spawning Wave " << waveCount << std::endl;
                 for (int i = 0; i < enemiesToSpawn; i++) {
@@ -3979,6 +3851,7 @@ void ServerHost::ServerLoop() {
                     InputAdapter ia(buf.begin() + offset, buf.end());
                     bitsery::Deserializer<InputAdapter> des(std::move(ia));
                     uint8_t type; des.value1b(type);
+
                     if (type == GamePacket::INPUT) {
                         PlayerInputPacket inp; des.object(inp);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
@@ -3992,6 +3865,22 @@ void ServerHost::ServerLoop() {
                             }
                         }
                     }
+                                        else if (type == GamePacket::ACTION) {
+                        ActionPacket act; des.object(act);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            if (gameScene.objects.count(peerId)) {
+                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                                if (p) {
+                                                                        if (act.type == ActionType::UPGRADE_BUILDING) {
+                                        gameScene.TryUpgrade(peerId, act.target);
+                                    }
+                                    else {
+                                        gameScene.TryBuild(peerId, act.type, act.target);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -4001,14 +3890,23 @@ void ServerHost::ServerLoop() {
             accumulator -= dt;
         }
 
-        // --- SNAPSHOTS (30 Hz) ---
-        if (snapshotTimer >= 0.033) {
+                if (!gameScene.pendingEvents.empty()) {
+            for (const auto& evt : gameScene.pendingEvents) {
+                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::EVENT);
+                ser.object(evt);
+                ser.adapter().flush();
+                netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+            }
+            gameScene.pendingEvents.clear();
+        }
+
+                if (snapshotTimer >= 0.033) {
             BroadcastSnapshot();
             snapshotTimer = 0;
         }
 
-        // --- PRIVATE STATS (5 Hz) ---
-        if (statsTimer >= 0.2) {
+                if (statsTimer >= 0.2) {
             for (auto& [id, obj] : gameScene.objects) {
                 if (obj->type == EntityType::PLAYER) {
                     auto p = std::dynamic_pointer_cast<Player>(obj);
@@ -4022,9 +3920,9 @@ void ServerHost::ServerLoop() {
                     stats.speed = p->curSpeed;
                     stats.scrap = p->scrap;
                     stats.kills = p->kills;
-                    // Сериализуем инвентарь (вектор)
                     stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
 
+                    
                     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                     ser.value1b(GamePacket::STATS);
                     ser.object(stats);
@@ -4045,7 +3943,7 @@ void ServerHost::BroadcastSnapshot() {
 
     WorldSnapshotPacket snap;
     snap.serverTime = GetSystemTime();
-    snap.wave = waveCount; // Отправляем текущую волну всем
+    snap.wave = waveCount;
 
     for (auto& [id, obj] : gameScene.objects) {
         EntityState state;
@@ -4075,13 +3973,14 @@ void ServerHost::BroadcastSnapshot() {
                 state.kills = p->kills;
             }
         }
-        else if (obj->type == EntityType::BULLET) {
-            state.radius = 5.0f;
-        }
+        else if (obj->type == EntityType::BULLET) state.radius = 5.0f;
         else if (obj->type == EntityType::ENEMY) {
             auto e = std::dynamic_pointer_cast<Enemy>(obj);
-            if (e) state.subtype = e->enemyType; // Тип врага для отрисовки
+            if (e) state.subtype = e->enemyType;
         }
+        else if (obj->type == EntityType::WALL) state.radius = 25.0f;
+        else if (obj->type == EntityType::TURRET) state.radius = 20.0f;
+        else if (obj->type == EntityType::MINE) state.radius = 15.0f;
 
         snap.entities.push_back(state);
     }
@@ -4110,9 +4009,8 @@ class ServerHost {
     std::atomic<bool> running{ false };
     std::thread serverThread;
 
-    // Переменные для волн врагов
     double waveTimer = 0.0;
-    double timeToNextWave = 5.0; // Первая волна через 5 секунд
+    double timeToNextWave = 5.0;
     int waveCount = 1;
 
 public:
@@ -4126,7 +4024,23 @@ public:
     void BroadcastSnapshot();
 };
 // engine\ECS\Artifact.h
+﻿#include "GameObject.h"
 
+class Artifact : public GameObject {
+public:
+    uint8_t bonusType = 0;
+    Artifact(uint32_t id, Vector2 pos, cpSpace* space) : GameObject(id, EntityType::ARTIFACT) {
+        spaceRef = space;
+        bonusType = rand() % 4;
+        cpFloat radius = 15.0f;
+        body = cpSpaceAddBody(space, cpBodyNew(1.0f, cpMomentForCircle(1.0f, 0, radius, cpvzero)));
+        cpBodySetPosition(body, ToCp(pos));
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
+        cpShapeSetSensor(shape, true);
+        cpShapeSetUserData(shape, (void*)this);
+    }
+    void Update(float dt) override {}
+};
 // engine\ECS\Bullet.h
 ﻿#pragma once
 #include "GameObject.h"
@@ -4172,6 +4086,104 @@ public:
     void Update(float dt) override {
         lifeTime -= dt;
         if (lifeTime <= 0) destroyFlag = true;
+    }
+};
+// engine\ECS\Construct.h
+﻿#pragma once
+#include "GameObject.h"
+#include "../PhysicsUtils.h"
+
+class Construct : public GameObject {
+public:
+    float lifetime = -1.0f;
+    uint32_t level = 1;
+    uint32_t ownerId;
+
+    Construct(uint32_t id, EntityType type, Vector2 pos, uint32_t owner, cpSpace* space)
+        : GameObject(id, type), ownerId(owner) {
+        spaceRef = space;
+    }
+
+    virtual void Upgrade() {
+        level++;
+        maxHealth *= 1.4f;         health = maxHealth;     }
+
+    virtual void Update(float dt) override {
+        if (lifetime > 0) {
+            lifetime -= dt;
+            if (lifetime <= 0) destroyFlag = true;
+        }
+    }
+};
+
+class Wall : public Construct {
+public:
+        Wall(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
+        : Construct(id, EntityType::WALL, pos, owner, space) {
+        maxHealth = 400.0f;
+        health = maxHealth;
+        color = GRAY;
+
+        body = cpSpaceAddBody(space, cpBodyNewStatic());
+        cpBodySetPosition(body, ToCp(pos));
+
+        shape = cpSpaceAddShape(space, cpBoxShapeNew(body, 50, 50, 0));
+        cpShapeSetElasticity(shape, 0.5f);
+        cpShapeSetFriction(shape, 0.5f);
+        cpShapeSetCollisionType(shape, COLLISION_WALL);
+        cpShapeSetUserData(shape, (void*)this);
+    }
+};
+
+class Turret : public Construct {
+public:
+    float range = 400.0f;
+    float reloadTime = 1.0f;     float cooldown = 0.0f;
+    float damage = 15.0f;    
+    Turret(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
+        : Construct(id, EntityType::TURRET, pos, owner, space) {
+        maxHealth = 200.0f;         health = maxHealth;
+        color = PURPLE;
+
+        body = cpSpaceAddBody(space, cpBodyNewStatic());
+        cpBodySetPosition(body, ToCp(pos));
+
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 25.0f, cpvzero));         cpShapeSetCollisionType(shape, COLLISION_WALL);
+        cpShapeSetUserData(shape, (void*)this);
+    }
+
+    void Upgrade() override {
+        Construct::Upgrade();         damage *= 1.3f;               reloadTime *= 0.85f;          range += 20.0f;
+    }
+
+    void Update(float dt) override {
+        Construct::Update(dt);
+        if (cooldown > 0) cooldown -= dt;
+    }
+};
+
+class Mine : public Construct {
+public:
+    float damage = 200.0f;
+
+    Mine(uint32_t id, Vector2 pos, uint32_t owner, cpSpace* space)
+        : Construct(id, EntityType::MINE, pos, owner, space) {
+        maxHealth = 50.0f;
+        health = maxHealth;
+        color = ORANGE;
+
+        body = cpSpaceAddBody(space, cpBodyNewStatic());
+        cpBodySetPosition(body, ToCp(pos));
+
+        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, 15.0f, cpvzero));
+        cpShapeSetSensor(shape, true);
+        cpShapeSetCollisionType(shape, COLLISION_BULLET);
+        cpShapeSetUserData(shape, (void*)this);
+    }
+
+    void Upgrade() override {
+        Construct::Upgrade();
+        damage += 100.0f;
     }
 };
 // engine\ECS\Enemy.h
@@ -4316,7 +4328,8 @@ inline Vector2 ToRay(cpVect v) {
     return Vector2{ (float)SanitizeDouble(v.x), (float)SanitizeDouble(v.y) };
 }
 // engine\ECS\Player.h
-﻿#pragma once
+﻿// engine/ECS/Player.h
+#pragma once
 #include "GameObject.h"
 #include "../PhysicsUtils.h"
 #include "raymath.h"
@@ -4333,7 +4346,7 @@ class Player : public GameObject {
 public:
     const float BASE_SPEED = 220.0f;
     const float BASE_RELOAD = 0.5f;
-    const float BASE_DAMAGE = 15.0f;
+    const float BASE_DAMAGE = 20.0f;
     const float BASE_HP = 100.0f;
 
     uint32_t level = 1;
@@ -4342,9 +4355,7 @@ public:
     uint32_t scrap = 0;
     uint32_t kills = 0;
 
-    // Инвентарь: 6 слотов. 255 = пусто
     uint8_t inventory[6];
-
     ArtifactStats artifacts;
 
     float shootCooldown = 0.0f;
@@ -4352,7 +4363,6 @@ public:
     Vector2 aimTarget = { 0,0 };
     bool spawnBulletSignal = false;
     Vector2 bulletDir = { 0,0 };
-    Vector2 currentVelocity = { 0,0 };
     Vector2 knockback = { 0, 0 };
 
     float curSpeed = 0;
@@ -4362,8 +4372,6 @@ public:
     Player(uint32_t id, Vector2 startPos, cpSpace* space) : GameObject(id, EntityType::PLAYER) {
         spaceRef = space;
         color = { 0, 120, 215, 255 };
-
-        // Обнуляем инвентарь
         for (int i = 0; i < 6; ++i) inventory[i] = ArtifactType::EMPTY;
 
         cpFloat radius = 20.0;
@@ -4395,11 +4403,9 @@ public:
         RecalculateStats();
     }
 
+    // Автоматическая прокачка
     void RecalculateStats() {
-        // Сброс бонусов
         artifacts = { 0,0,0,0 };
-
-        // Пересчет бонусов от инвентаря
         for (int i = 0; i < 6; i++) {
             if (inventory[i] == ArtifactType::EMPTY) continue;
             switch (inventory[i]) {
@@ -4411,10 +4417,16 @@ public:
         }
 
         float lvlScale = (float)(level - 1);
-        maxHealth = (BASE_HP + artifacts.healthFlat) * (1.0f + (lvlScale * 0.1f));
-        curDamage = BASE_DAMAGE * (1.0f + (lvlScale * 0.1f) + artifacts.damageMult);
-        curSpeed = BASE_SPEED * (1.0f + (lvlScale * 0.02f) + artifacts.speedMult);
-        curReload = BASE_RELOAD * (1.0f - (lvlScale * 0.03f) - artifacts.reloadMult);
+
+        // Формулы автоматического роста
+        maxHealth = (BASE_HP + artifacts.healthFlat) + (lvlScale * 20.0f); // +20 HP за уровень
+        curDamage = BASE_DAMAGE + (lvlScale * 3.0f);                       // +3 урона за уровень
+        curDamage *= (1.0f + artifacts.damageMult);
+
+        curSpeed = BASE_SPEED + (lvlScale * 2.0f);                         // Немного скорости
+        curSpeed *= (1.0f + artifacts.speedMult);
+
+        curReload = BASE_RELOAD * (1.0f - (lvlScale * 0.02f) - artifacts.reloadMult); // Чуть быстрее перезарядка
         if (curReload < 0.1f) curReload = 0.1f;
 
         if (health > maxHealth) health = maxHealth;
@@ -4428,7 +4440,7 @@ public:
                 return true;
             }
         }
-        return false; // Инвентарь полон
+        return false;
     }
 
     void AddXp(float amount) {
@@ -4438,27 +4450,23 @@ public:
             level++;
             maxXp *= 1.2f;
             RecalculateStats();
-            health = maxHealth; // Лечим при уровне
+            health = maxHealth; // Полное лечение при уровне
         }
     }
 
     void Update(float dt) override {
-        // --- РЕГЕНЕРАЦИЯ ---
+        // Регенерация
         double currentTime = GetTime();
-        float regenAmount = maxHealth * 0.01f * dt; // 1% в сек база
-        if (currentTime - lastDamageTime > 5.0) {
-            regenAmount *= 5.0f; // 5% в сек, если не получали урон 5 сек
-        }
-        health += regenAmount;
+        float baseRegen = maxHealth * 0.01f; // 1%
+        if (currentTime - lastDamageTime > 5.0) baseRegen *= 5.0f; // 5% вне боя
+
+        health += baseRegen * dt;
         if (health > maxHealth) health = maxHealth;
-        // -------------------
 
         if (shootCooldown > 0) shootCooldown -= dt;
         knockback = Vector2Lerp(knockback, { 0,0 }, dt * 5.0f);
 
         Vector2 pos = ToRay(cpBodyGetPosition(body));
-        cpVect cv = cpBodyGetVelocity(body);
-        currentVelocity = { (float)cv.x, (float)cv.y };
 
         if (wantsToShoot && shootCooldown <= 0) {
             shootCooldown = curReload;
@@ -4478,7 +4486,6 @@ public:
         if (!std::isfinite(move.x) || !std::isfinite(move.y)) move = { 0, 0 };
         float len = Vector2Length(move);
         if (len > 1.0f) move = Vector2Normalize(move);
-        if (len < 0.1f) move = { 0, 0 };
 
         Vector2 targetVel = Vector2Scale(move, curSpeed);
         Vector2 finalVel = Vector2Add(targetVel, knockback);
@@ -4495,43 +4502,33 @@ public:
 #include "ECS/Player.h"
 #include "ECS/Bullet.h"
 #include "ECS/Enemy.h"
+#include "ECS/Construct.h"
+#include "ECS/Artifact.h"
 #include "PhysicsUtils.h"
+#include "../../common/NetworkPackets.h"
 
-// Класс артефакта
-class Artifact : public GameObject {
-public:
-    uint8_t bonusType = 0;
-    Artifact(uint32_t id, Vector2 pos, cpSpace* space) : GameObject(id, EntityType::ARTIFACT) {
-        spaceRef = space;
-        bonusType = rand() % 4; // Случайный тип
-        cpFloat radius = 15.0f;
-        body = cpSpaceAddBody(space, cpBodyNew(1.0f, cpMomentForCircle(1.0f, 0, radius, cpvzero)));
-        cpBodySetPosition(body, ToCp(pos));
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
-        cpShapeSetSensor(shape, true);
-        cpShapeSetUserData(shape, (void*)this);
-    }
-    void Update(float dt) override {}
-};
+
 
 class GameScene {
 public:
     cpSpace* space;
     std::map<uint32_t, std::shared_ptr<GameObject>> objects;
+    std::vector<EventPacket> pendingEvents;
+
     uint32_t nextId = 1000;
     float width = 4000;
     float height = 4000;
+    const float GRID_SIZE = 50.0f;
 
     GameScene() {
         space = cpSpaceNew();
         cpSpaceSetGravity(space, cpv(0, 0));
-        cpSpaceSetIdleSpeedThreshold(space, 0);
         CreateMapBoundaries();
     }
 
     ~GameScene() { objects.clear(); cpSpaceFree(space); }
 
-    void CreateMapBoundaries() { /* ... код стен тот же ... */
+    void CreateMapBoundaries() {
         cpBody* staticBody = cpSpaceGetStaticBody(space);
         float thickness = 2000.0f;
         auto addWall = [&](float x, float y, float w, float h) {
@@ -4545,19 +4542,87 @@ public:
         addWall(-thickness, height, width + thickness * 2, thickness);
     }
 
+        Vector2 SnapToGrid(Vector2 pos) {
+        float x = roundf(pos.x / GRID_SIZE) * GRID_SIZE;
+        float y = roundf(pos.y / GRID_SIZE) * GRID_SIZE;
+        return { x, y };
+    }
+
+        void TryBuild(uint32_t playerId, uint8_t buildType, Vector2 rawPos) {
+        if (!objects.count(playerId)) return;
+        auto p = std::dynamic_pointer_cast<Player>(objects[playerId]);
+        if (!p) return;
+
+        Vector2 pos = SnapToGrid(rawPos);
+
+                if (pos.x < GRID_SIZE || pos.x > width - GRID_SIZE ||
+            pos.y < GRID_SIZE || pos.y > height - GRID_SIZE) {
+            return;
+        }
+
+                if (Vector2Distance(ToRay(cpBodyGetPosition(p->body)), pos) > 400.0f) return;
+
+                for (auto& [id, obj] : objects) {
+            if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
+                if (Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), pos) < (GRID_SIZE / 2.0f)) {
+                    return;                 }
+            }
+        }
+
+        int cost = 0;
+        if (buildType == ActionType::BUILD_WALL) cost = 10;
+        else if (buildType == ActionType::BUILD_TURRET) cost = 50;
+        else if (buildType == ActionType::BUILD_MINE) cost = 25;
+
+        if (p->scrap >= cost) {
+            p->scrap -= cost;
+            std::shared_ptr<GameObject> obj = nullptr;
+
+            if (buildType == ActionType::BUILD_WALL)
+                obj = std::make_shared<Wall>(nextId++, pos, p->id, space);
+            else if (buildType == ActionType::BUILD_TURRET)
+                obj = std::make_shared<Turret>(nextId++, pos, p->id, space);
+            else if (buildType == ActionType::BUILD_MINE)
+                obj = std::make_shared<Mine>(nextId++, pos, p->id, space);
+
+            if (obj) {
+                objects[obj->id] = obj;
+                pendingEvents.push_back({ 1, pos, WHITE });
+            }
+        }
+    }
+
+        void TryUpgrade(uint32_t playerId, Vector2 rawPos) {
+        if (!objects.count(playerId)) return;
+        auto p = std::dynamic_pointer_cast<Player>(objects[playerId]);
+
+                for (auto& [id, obj] : objects) {
+            if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
+                Vector2 objPos = ToRay(cpBodyGetPosition(obj->body));
+
+                                if (Vector2Distance(rawPos, objPos) < 30.0f) {
+                    auto c = std::dynamic_pointer_cast<Construct>(obj);
+                                        
+                    int cost = 20 * c->level;                     if (p->scrap >= cost) {
+                        p->scrap -= cost;
+                        c->Upgrade();
+                        pendingEvents.push_back({ 2, objPos, GREEN });                     }
+                    return;
+                }
+            }
+        }
+    }
+
     std::shared_ptr<Player> CreatePlayerWithId(uint32_t id) {
         Vector2 startPos = { width / 2.0f, height / 2.0f };
-        // Если объект уже был, удаляем старый
         if (objects.count(id)) objects.erase(id);
-
         auto p = std::make_shared<Player>(id, startPos, space);
-        p->Reset(); // Сброс статов при создании
+        p->Reset();
         objects[id] = p;
         return p;
     }
 
     std::shared_ptr<Enemy> SpawnEnemy() {
-        // ... (код спавна тот же, с рандомом типа) ...
         float spawnX, spawnY;
         int side = rand() % 4;
         float offset = 50.0f;
@@ -4595,21 +4660,60 @@ public:
                     p->spawnBulletSignal = false;
                     Vector2 playerPos = ToRay(cpBodyGetPosition(p->body));
                     Vector2 dir = Vector2Normalize(p->bulletDir);
-                    float playerRadius = 20.0f + (p->level - 1) * 2.0f;
-                    float spawnOffset = (playerRadius * 1.8f) + 5.0f;
-                    auto b = std::make_shared<Bullet>(nextId++, Vector2Add(playerPos, Vector2Scale(dir, spawnOffset)), dir, p->id, space);
-                    cpBodySetVelocity(b->body, cpvadd(cpBodyGetVelocity(b->body), cpvmult(cpBodyGetVelocity(p->body), 0.4f)));
+                    auto b = std::make_shared<Bullet>(nextId++, Vector2Add(playerPos, Vector2Scale(dir, 35.0f)), dir, p->id, space);
+                    cpBodySetVelocity(b->body, cpvadd(cpvmult(ToCp(dir), 600.0f), cpvmult(cpBodyGetVelocity(p->body), 0.4f)));
                     newBullets.push_back(b);
                 }
             }
-            // AI врагов
+
+            if (obj->type == EntityType::TURRET) {
+                auto t = std::dynamic_pointer_cast<Turret>(obj);
+                if (t->cooldown <= 0) {
+                    float minDist = t->range;
+                    std::shared_ptr<GameObject> target = nullptr;
+                    Vector2 tPos = ToRay(cpBodyGetPosition(t->body));
+
+                    for (auto& [eid, eObj] : objects) {
+                        if (eObj->type == EntityType::ENEMY) {
+                            float d = Vector2Distance(tPos, ToRay(cpBodyGetPosition(eObj->body)));
+                            if (d < minDist) { minDist = d; target = eObj; }
+                        }
+                    }
+
+                    if (target) {
+                        t->cooldown = t->reloadTime;
+                        Vector2 ePos = ToRay(cpBodyGetPosition(target->body));
+                        Vector2 dir = Vector2Normalize(Vector2Subtract(ePos, tPos));
+                        auto b = std::make_shared<Bullet>(nextId++, Vector2Add(tPos, Vector2Scale(dir, 35.0f)), dir, t->ownerId, space);
+                                                                                                newBullets.push_back(b);
+                    }
+                }
+            }
+
+            if (obj->type == EntityType::MINE) {
+                auto m = std::dynamic_pointer_cast<Mine>(obj);
+                Vector2 mPos = ToRay(cpBodyGetPosition(m->body));
+                for (auto& [eid, eObj] : objects) {
+                    if (eObj->type == EntityType::ENEMY) {
+                        if (Vector2Distance(mPos, ToRay(cpBodyGetPosition(eObj->body))) < 35.0f) {
+                            pendingEvents.push_back({ 1, mPos, ORANGE });
+                            eObj->TakeDamage(m->damage, GetTime());
+                            m->destroyFlag = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
             if (obj->type == EntityType::ENEMY) {
                 auto enemy = std::dynamic_pointer_cast<Enemy>(obj);
                 float minDist = 999999.0f;
                 Vector2 targetPos = { width / 2, height / 2 };
+                Vector2 myPos = ToRay(cpBodyGetPosition(obj->body));
+
                 for (const auto& [pid, pObj] : objects) {
-                    if (pObj->type == EntityType::PLAYER) {
-                        float dist = Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), ToRay(cpBodyGetPosition(pObj->body)));
+                    if (pObj->type == EntityType::PLAYER || pObj->type == EntityType::TURRET) {
+                        float dist = Vector2Distance(myPos, ToRay(cpBodyGetPosition(pObj->body)));
                         if (dist < minDist) { minDist = dist; targetPos = ToRay(cpBodyGetPosition(pObj->body)); }
                     }
                 }
@@ -4624,9 +4728,9 @@ public:
         HandleCollisionsAndDamage();
     }
 
-    void EnforceMapBoundaries() { /* ... код тот же ... */
+    void EnforceMapBoundaries() {
         for (auto& [id, obj] : objects) {
-            if (obj->type == EntityType::BULLET || !obj->body) continue;
+            if (obj->type == EntityType::BULLET || !obj->body || cpBodyGetType(obj->body) == CP_BODY_TYPE_STATIC) continue;
             cpVect pos = cpBodyGetPosition(obj->body);
             cpVect vel = cpBodyGetVelocity(obj->body);
             float r = 20.0f;
@@ -4643,36 +4747,30 @@ public:
         std::vector<std::shared_ptr<GameObject>> newArtifacts;
         double currentTime = GetTime();
 
-        // 1. Контактный урон: Враг -> Игрок
-        for (auto& [eid, eObj] : objects) {
+                for (auto& [eid, eObj] : objects) {
             if (eObj->type != EntityType::ENEMY) continue;
             auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
             Vector2 ePos = ToRay(cpBodyGetPosition(enemy->body));
+            float eRad = 20.0f;
 
             for (auto& [pid, pObj] : objects) {
-                if (pObj->type != EntityType::PLAYER) continue;
-                auto player = std::dynamic_pointer_cast<Player>(pObj);
-                Vector2 pPos = ToRay(cpBodyGetPosition(player->body));
+                if (pObj->type != EntityType::PLAYER && pObj->type != EntityType::WALL && pObj->type != EntityType::TURRET) continue;
 
-                // Дистанция касания (радиус врага + радиус игрока)
-                float touchDist = 20.0f + (20.0f + (player->level - 1) * 2.0f);
-                if (Vector2Distance(ePos, pPos) < touchDist) {
-                    // Наносим урон игроку (ДПС: урон врага * delta_time, но тут дискретно)
-                    // Для простоты наносим урон каждый кадр, но маленький? Нет, лучше по таймеру
-                    // Но у нас нет dt здесь. Сделаем простой кулдаун атаки у врага? 
-                    // Или просто будем считать это как постоянный урон (DPS)
-                    // В текущей архитектуре проще наносить урон каждый тик физики (60 Гц), поэтому делим на 60
-                    player->TakeDamage(enemy->damage / 60.0f, currentTime);
+                Vector2 pPos = ToRay(cpBodyGetPosition(pObj->body));
+                float pRad = 25.0f;                 if (pObj->type == EntityType::WALL) pRad = 35.0f;
 
-                    // Отталкивание
-                    Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
-                    cpBodyApplyImpulseAtLocalPoint(player->body, ToCp(Vector2Scale(knockDir, 50.0f)), cpvzero);
+                if (Vector2Distance(ePos, pPos) < (eRad + pRad)) {
+                    pObj->TakeDamage(enemy->damage / 60.0f, currentTime);
+
+                    if (cpBodyGetType(pObj->body) != CP_BODY_TYPE_STATIC) {
+                        Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
+                        cpBodyApplyImpulseAtLocalPoint(pObj->body, ToCp(Vector2Scale(knockDir, 50.0f)), cpvzero);
+                    }
                 }
             }
         }
 
-        // 2. Артефакты
-        for (auto& [aid, aObj] : objects) {
+                for (auto& [aid, aObj] : objects) {
             if (aObj->type != EntityType::ARTIFACT) continue;
             Vector2 aPos = ToRay(cpBodyGetPosition(aObj->body));
             for (auto& [pid, pObj] : objects) {
@@ -4680,59 +4778,75 @@ public:
                 auto p = std::dynamic_pointer_cast<Player>(pObj);
                 if (Vector2Distance(aPos, ToRay(cpBodyGetPosition(p->body))) < 40.0f) {
                     auto art = std::dynamic_pointer_cast<Artifact>(aObj);
-                    // Пытаемся положить в инвентарь
                     if (p->AddItemToInventory(art->bonusType)) {
                         aObj->destroyFlag = true;
+                        pendingEvents.push_back({ 2, aPos, GOLD });
                     }
                 }
             }
         }
 
-        // 3. Пули
-        for (auto& [bid, bObj] : objects) {
+                for (auto& [bid, bObj] : objects) {
             if (bObj->type != EntityType::BULLET) continue;
             auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
             Vector2 bPos = ToRay(cpBodyGetPosition(bullet->body));
-            // Границы
+
             if (bPos.x <= -50 || bPos.x >= width + 50 || bPos.y <= -50 || bPos.y >= height + 50) {
                 bullet->destroyFlag = true; continue;
             }
 
             for (auto& [tid, tObj] : objects) {
-                if (tid == bullet->ownerId || tObj->type == EntityType::BULLET || tObj->type == EntityType::ARTIFACT) continue;
+                if (tid == bullet->ownerId || tObj->type == EntityType::BULLET ||
+                    tObj->type == EntityType::ARTIFACT || tObj->type == EntityType::MINE) continue;
 
-                float targetRadius = 30.0f;
-                if (tObj->type == EntityType::ENEMY) {
+                                if (objects.count(bullet->ownerId)) {
+                                        if (objects[bullet->ownerId]->type == EntityType::PLAYER &&
+                        (tObj->type == EntityType::TURRET || tObj->type == EntityType::WALL)) continue;
+                }
+
+                float targetRadius = 25.0f;
+                if (tObj->type == EntityType::WALL) targetRadius = 35.0f;                 else if (tObj->type == EntityType::ENEMY) {
                     auto e = std::dynamic_pointer_cast<Enemy>(tObj);
-                    if (e->enemyType == EnemyType::BOSS) targetRadius = 60.0f;
+                    if (e && e->enemyType == EnemyType::BOSS) targetRadius = 60.0f;
                 }
 
                 if (Vector2Distance(bPos, ToRay(cpBodyGetPosition(tObj->body))) < targetRadius) {
                     bullet->destroyFlag = true;
+                    pendingEvents.push_back({ 0, bPos, WHITE });
+
                     float dmg = 10.0f;
-                    std::shared_ptr<Player> attacker = nullptr;
-                    if (objects.count(bullet->ownerId)) {
-                        attacker = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
-                        if (attacker) dmg = attacker->curDamage;
+                                        if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                        auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                        dmg = p->curDamage;
+                    }
+                                        else if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::TURRET) {
+                        auto t = std::dynamic_pointer_cast<Turret>(objects[bullet->ownerId]);
+                        dmg = t->damage;
                     }
 
                     tObj->TakeDamage(dmg, currentTime);
 
                     if (tObj->health <= 0) {
+                        Color debrisCol = GRAY;
+                        if (tObj->type == EntityType::ENEMY) debrisCol = RED;
+
+                        pendingEvents.push_back({ 1, ToRay(cpBodyGetPosition(tObj->body)), debrisCol });
+
                         if (tObj->type == EntityType::PLAYER) {
                             auto p = std::dynamic_pointer_cast<Player>(tObj);
-                            p->Reset(); // Сброс при смерти
+                            p->Reset();
                             cpBodySetPosition(p->body, cpv(rand() % (int)width, rand() % (int)height));
-                            if (attacker) { attacker->AddXp(50.0f + p->level * 10); attacker->kills++; }
                         }
                         else if (tObj->type == EntityType::ENEMY) {
                             tObj->destroyFlag = true;
                             auto e = std::dynamic_pointer_cast<Enemy>(tObj);
-                            if (attacker) { attacker->AddXp(e->xpReward); attacker->scrap += e->scrapReward; }
-                            if (e->enemyType == EnemyType::BOSS) {
-                                auto art = std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(e->body)), space);
-                                newArtifacts.push_back(art);
+                            if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
+                                auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
+                                p->AddXp(e->xpReward); p->scrap += e->scrapReward;
                             }
+                        }
+                        else if (tObj->type == EntityType::WALL || tObj->type == EntityType::TURRET) {
+                            tObj->destroyFlag = true;
                         }
                     }
                 }

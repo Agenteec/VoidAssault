@@ -1,9 +1,9 @@
-﻿// common/NetworkPackets.h
-#pragma once
+﻿#pragma once
 #include "PacketSerialization.h"
 #include "raylib.h"
 #include <cstdint>
 #include <vector>
+
 namespace GamePacket {
     enum Type : uint8_t {
         INPUT = 1,
@@ -11,7 +11,8 @@ namespace GamePacket {
         SNAPSHOT,
         EVENT,
         STATS,
-        ACTION
+        ACTION,
+                ADMIN_CMD = 8
     };
 }
 
@@ -20,15 +21,24 @@ namespace ActionType {
         BUILD_WALL = 1,
         BUILD_TURRET,
         BUILD_MINE,
-        UPGRADE_BUILDING // NEW: Улучшение постройки
+        UPGRADE_BUILDING
     };
 }
 
-// Типы сущностей
+namespace AdminCmdType {
+    enum : uint8_t {
+        LOGIN = 0,
+        GIVE_SCRAP,
+        GIVE_XP,
+        KILL_ALL_ENEMIES,
+        SPAWN_BOSS
+    };
+}
+
 enum class EntityType : uint8_t { PLAYER, BULLET, ENEMY, ARTIFACT, WALL, TURRET, MINE };
 
 namespace EnemyType {
-    enum : uint8_t { BASIC = 0, FAST, TANK, BOSS };
+    enum : uint8_t { BASIC = 0, FAST, TANK, BOSS, HOMING, LASER };
 }
 
 namespace ArtifactType {
@@ -49,13 +59,24 @@ struct EventPacket {
 };
 
 struct ActionPacket {
-    uint8_t type;       // ActionType
-    Vector2 target;     // Координаты клика (для стройки или улучшения)
+    uint8_t type;
+    Vector2 target;
 
     template <typename S>
     void serialize(S& s) {
         s.value1b(type);
         s.object(target);
+    }
+};
+
+struct AdminCommandPacket {
+    uint8_t cmdType;
+    uint32_t value;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.value1b(cmdType);
+        s.value4b(value);
     }
 };
 
@@ -68,9 +89,8 @@ struct PlayerStatsPacket {
     float speed;
     uint32_t scrap;
     uint32_t kills;
-
-    // Инвентарь
-    std::vector<uint8_t> inventory;
+        std::vector<uint8_t> inventory;
+    bool isAdmin;
 
     template <typename S>
     void serialize(S& s) {
@@ -83,25 +103,9 @@ struct PlayerStatsPacket {
         s.value4b(scrap);
         s.value4b(kills);
         s.container1b(inventory, 6);
+        s.boolValue(isAdmin);
     }
 };
-
-
-// NEW: Типы характеристик
-namespace StatType {
-    enum : uint8_t {
-        HEALTH_REGEN = 0,
-        MAX_HEALTH,
-        BODY_DAMAGE,
-        BULLET_SPEED,
-        BULLET_PEN,
-        BULLET_DAMAGE,
-        RELOAD,
-        MOVE_SPEED,
-        COUNT // 8 stats
-    };
-}
-
 
 struct PlayerInputPacket {
     Vector2 movement;

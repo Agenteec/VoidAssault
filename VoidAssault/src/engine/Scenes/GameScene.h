@@ -1,5 +1,4 @@
-﻿// engine/Scenes/GameScene.h
-#pragma once
+﻿#pragma once
 #include <vector>
 #include <memory>
 #include <map>
@@ -8,24 +7,9 @@
 #include "ECS/Bullet.h"
 #include "ECS/Enemy.h"
 #include "ECS/Construct.h"
+#include "ECS/Artifact.h"
 #include "PhysicsUtils.h"
 #include "../../common/NetworkPackets.h"
-
-class Artifact : public GameObject {
-public:
-    uint8_t bonusType = 0;
-    Artifact(uint32_t id, Vector2 pos, cpSpace* space) : GameObject(id, EntityType::ARTIFACT) {
-        spaceRef = space;
-        bonusType = rand() % 4;
-        cpFloat radius = 15.0f;
-        body = cpSpaceAddBody(space, cpBodyNew(1.0f, cpMomentForCircle(1.0f, 0, radius, cpvzero)));
-        cpBodySetPosition(body, ToCp(pos));
-        shape = cpSpaceAddShape(space, cpCircleShapeNew(body, radius, cpvzero));
-        cpShapeSetSensor(shape, true);
-        cpShapeSetUserData(shape, (void*)this);
-    }
-    void Update(float dt) override {}
-};
 
 class GameScene {
 public:
@@ -36,7 +20,7 @@ public:
     uint32_t nextId = 1000;
     float width = 4000;
     float height = 4000;
-    const float GRID_SIZE = 50.0f; // Размер клетки
+    const float GRID_SIZE = 50.0f;
 
     GameScene() {
         space = cpSpaceNew();
@@ -52,7 +36,7 @@ public:
         auto addWall = [&](float x, float y, float w, float h) {
             cpVect verts[] = { cpv(x, y), cpv(x, y + h), cpv(x + w, y + h), cpv(x + w, y) };
             cpShape* s = cpSpaceAddShape(space, cpPolyShapeNew(staticBody, 4, verts, cpTransformIdentity, 0.0));
-            cpShapeSetElasticity(s, 0.0f); cpShapeSetFriction(s, 0.0f); cpShapeSetCollisionType(s, COLLISION_WALL);
+            cpShapeSetElasticity(s, 0.0f); cpShapeSetFriction(s, 0.5f); cpShapeSetCollisionType(s, COLLISION_WALL);
             };
         addWall(-thickness, -thickness, thickness, height + thickness * 2);
         addWall(width, -thickness, thickness, height + thickness * 2);
@@ -60,36 +44,47 @@ public:
         addWall(-thickness, height, width + thickness * 2, thickness);
     }
 
-    // Вспомогательная функция привязки к сетке
     Vector2 SnapToGrid(Vector2 pos) {
         float x = roundf(pos.x / GRID_SIZE) * GRID_SIZE;
         float y = roundf(pos.y / GRID_SIZE) * GRID_SIZE;
         return { x, y };
     }
 
-    // Логика строительства
+    void HandleAdminCommand(uint32_t playerId, const AdminCommandPacket& cmd) {
+        if (!objects.count(playerId)) return;
+        auto p = std::dynamic_pointer_cast<Player>(objects[playerId]);
+        if (!p) return;
+        if (cmd.cmdType == AdminCmdType::LOGIN) p->isAdmin = true;
+        if (!p->isAdmin) return;
+
+        switch (cmd.cmdType) {
+        case AdminCmdType::GIVE_SCRAP: p->scrap += cmd.value; break;
+        case AdminCmdType::GIVE_XP: p->AddXp((float)cmd.value); break;
+        case AdminCmdType::KILL_ALL_ENEMIES: {
+            for (auto& [id, obj] : objects) {
+                if (obj->type == EntityType::ENEMY) {
+                    obj->health = 0;
+                    obj->TakeDamage(9999, 0);
+                }
+            }
+        } break;
+        case AdminCmdType::SPAWN_BOSS: SpawnEnemy(EnemyType::BOSS); break;
+        }
+    }
+
+    
     void TryBuild(uint32_t playerId, uint8_t buildType, Vector2 rawPos) {
         if (!objects.count(playerId)) return;
         auto p = std::dynamic_pointer_cast<Player>(objects[playerId]);
         if (!p) return;
 
         Vector2 pos = SnapToGrid(rawPos);
-
-        // Проверка границ карты (нельзя строить за пределами)
-        if (pos.x < GRID_SIZE || pos.x > width - GRID_SIZE ||
-            pos.y < GRID_SIZE || pos.y > height - GRID_SIZE) {
-            return;
-        }
-
-        // Проверка дистанции
+        if (pos.x < GRID_SIZE || pos.x > width - GRID_SIZE || pos.y < GRID_SIZE || pos.y > height - GRID_SIZE) return;
         if (Vector2Distance(ToRay(cpBodyGetPosition(p->body)), pos) > 400.0f) return;
 
-        // Проверка на занятость места
         for (auto& [id, obj] : objects) {
             if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
-                if (Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), pos) < (GRID_SIZE / 2.0f)) {
-                    return; // Место занято
-                }
+                if (Vector2Distance(ToRay(cpBodyGetPosition(obj->body)), pos) < (GRID_SIZE / 2.0f)) return;
             }
         }
 
@@ -101,13 +96,9 @@ public:
         if (p->scrap >= cost) {
             p->scrap -= cost;
             std::shared_ptr<GameObject> obj = nullptr;
-
-            if (buildType == ActionType::BUILD_WALL)
-                obj = std::make_shared<Wall>(nextId++, pos, p->id, space);
-            else if (buildType == ActionType::BUILD_TURRET)
-                obj = std::make_shared<Turret>(nextId++, pos, p->id, space);
-            else if (buildType == ActionType::BUILD_MINE)
-                obj = std::make_shared<Mine>(nextId++, pos, p->id, space);
+            if (buildType == ActionType::BUILD_WALL) obj = std::make_shared<Wall>(nextId++, pos, p->id, space);
+            else if (buildType == ActionType::BUILD_TURRET) obj = std::make_shared<Turret>(nextId++, pos, p->id, space);
+            else if (buildType == ActionType::BUILD_MINE) obj = std::make_shared<Mine>(nextId++, pos, p->id, space);
 
             if (obj) {
                 objects[obj->id] = obj;
@@ -116,27 +107,19 @@ public:
         }
     }
 
-    // Логика улучшения
     void TryUpgrade(uint32_t playerId, Vector2 rawPos) {
         if (!objects.count(playerId)) return;
         auto p = std::dynamic_pointer_cast<Player>(objects[playerId]);
-
-        // Ищем постройку рядом с кликом
         for (auto& [id, obj] : objects) {
             if (obj->type == EntityType::WALL || obj->type == EntityType::TURRET || obj->type == EntityType::MINE) {
                 Vector2 objPos = ToRay(cpBodyGetPosition(obj->body));
-
-                // Проверяем, что кликнули близко к центру клетки
                 if (Vector2Distance(rawPos, objPos) < 30.0f) {
                     auto c = std::dynamic_pointer_cast<Construct>(obj);
-                    // Проверяем владельца (своё или нет)
-                    // if (c->ownerId != p->id) return; // Можно разрешить улучшать чужое, если в одной команде (пока нет команд)
-
-                    int cost = 20 * c->level; // Цена растет с уровнем
+                    int cost = 20 * c->level;
                     if (p->scrap >= cost) {
                         p->scrap -= cost;
                         c->Upgrade();
-                        pendingEvents.push_back({ 2, objPos, GREEN }); // Эффект улучшения
+                        pendingEvents.push_back({ 2, objPos, GREEN });
                     }
                     return;
                 }
@@ -149,11 +132,12 @@ public:
         if (objects.count(id)) objects.erase(id);
         auto p = std::make_shared<Player>(id, startPos, space);
         p->Reset();
+        if (objects.size() == 0) p->isAdmin = true;
         objects[id] = p;
         return p;
     }
 
-    std::shared_ptr<Enemy> SpawnEnemy() {
+    std::shared_ptr<Enemy> SpawnEnemy(uint8_t forcedType = 255) {
         float spawnX, spawnY;
         int side = rand() % 4;
         float offset = 50.0f;
@@ -162,12 +146,17 @@ public:
         else if (side == 2) { spawnX = (float)(rand() % (int)width); spawnY = -offset; }
         else { spawnX = (float)(rand() % (int)width); spawnY = height + offset; }
 
-        int chance = rand() % 100;
         uint8_t type = EnemyType::BASIC;
-        if (chance < 60) type = EnemyType::BASIC;
-        else if (chance < 85) type = EnemyType::FAST;
-        else if (chance < 98) type = EnemyType::TANK;
-        else type = EnemyType::BOSS;
+        if (forcedType != 255) {
+            type = forcedType;
+        }
+        else {
+            int chance = rand() % 100;
+            if (chance < 60) type = EnemyType::BASIC;
+            else if (chance < 85) type = EnemyType::FAST;
+            else if (chance < 98) type = EnemyType::TANK;
+            else type = EnemyType::BOSS;
+        }
 
         auto enemy = std::make_shared<Enemy>(nextId++, Vector2{ spawnX, spawnY }, type, space);
         objects[enemy->id] = enemy;
@@ -192,7 +181,11 @@ public:
                     Vector2 playerPos = ToRay(cpBodyGetPosition(p->body));
                     Vector2 dir = Vector2Normalize(p->bulletDir);
                     auto b = std::make_shared<Bullet>(nextId++, Vector2Add(playerPos, Vector2Scale(dir, 35.0f)), dir, p->id, space);
-                    cpBodySetVelocity(b->body, cpvadd(cpvmult(ToCp(dir), 600.0f), cpvmult(cpBodyGetVelocity(p->body), 0.4f)));
+
+                    b->lifeTime = p->curBulletPen;
+                    float spd = p->curBulletSpeed;
+
+                    cpBodySetVelocity(b->body, cpvadd(cpvmult(ToCp(dir), spd), cpvmult(cpBodyGetVelocity(p->body), 0.2f)));
                     newBullets.push_back(b);
                 }
             }
@@ -203,22 +196,17 @@ public:
                     float minDist = t->range;
                     std::shared_ptr<GameObject> target = nullptr;
                     Vector2 tPos = ToRay(cpBodyGetPosition(t->body));
-
                     for (auto& [eid, eObj] : objects) {
                         if (eObj->type == EntityType::ENEMY) {
                             float d = Vector2Distance(tPos, ToRay(cpBodyGetPosition(eObj->body)));
                             if (d < minDist) { minDist = d; target = eObj; }
                         }
                     }
-
                     if (target) {
                         t->cooldown = t->reloadTime;
                         Vector2 ePos = ToRay(cpBodyGetPosition(target->body));
                         Vector2 dir = Vector2Normalize(Vector2Subtract(ePos, tPos));
                         auto b = std::make_shared<Bullet>(nextId++, Vector2Add(tPos, Vector2Scale(dir, 35.0f)), dir, t->ownerId, space);
-                        // Пуля турели наносит урон, зависящий от турели
-                        // Но класс пули берет урон от владельца (игрока).
-                        // Это нормально, но можно модифицировать Bullet чтобы хранить базовый урон.
                         newBullets.push_back(b);
                     }
                 }
@@ -281,7 +269,6 @@ public:
         std::vector<std::shared_ptr<GameObject>> newArtifacts;
         double currentTime = GetTime();
 
-        // 1. Контактный урон: Враг -> Игрок / Турель / Стена
         for (auto& [eid, eObj] : objects) {
             if (eObj->type != EntityType::ENEMY) continue;
             auto enemy = std::dynamic_pointer_cast<Enemy>(eObj);
@@ -292,12 +279,16 @@ public:
                 if (pObj->type != EntityType::PLAYER && pObj->type != EntityType::WALL && pObj->type != EntityType::TURRET) continue;
 
                 Vector2 pPos = ToRay(cpBodyGetPosition(pObj->body));
-                float pRad = 25.0f; // Радиус для стены/турели чуть больше
+                float pRad = 25.0f;
                 if (pObj->type == EntityType::WALL) pRad = 35.0f;
+                float bodyDmg = enemy->damage;
+                if (pObj->type == EntityType::PLAYER) {
+                    auto p = std::dynamic_pointer_cast<Player>(pObj);
+                    enemy->TakeDamage(p->curBodyDmg * 0.5f, currentTime);
+                }
 
                 if (Vector2Distance(ePos, pPos) < (eRad + pRad)) {
-                    pObj->TakeDamage(enemy->damage / 60.0f, currentTime);
-
+                    pObj->TakeDamage(bodyDmg * 0.016f, currentTime);
                     if (cpBodyGetType(pObj->body) != CP_BODY_TYPE_STATIC) {
                         Vector2 knockDir = Vector2Normalize(Vector2Subtract(pPos, ePos));
                         cpBodyApplyImpulseAtLocalPoint(pObj->body, ToCp(Vector2Scale(knockDir, 50.0f)), cpvzero);
@@ -306,7 +297,6 @@ public:
             }
         }
 
-        // 2. Артефакты
         for (auto& [aid, aObj] : objects) {
             if (aObj->type != EntityType::ARTIFACT) continue;
             Vector2 aPos = ToRay(cpBodyGetPosition(aObj->body));
@@ -323,7 +313,6 @@ public:
             }
         }
 
-        // 3. Пули
         for (auto& [bid, bObj] : objects) {
             if (bObj->type != EntityType::BULLET) continue;
             auto bullet = std::dynamic_pointer_cast<Bullet>(bObj);
@@ -337,15 +326,13 @@ public:
                 if (tid == bullet->ownerId || tObj->type == EntityType::BULLET ||
                     tObj->type == EntityType::ARTIFACT || tObj->type == EntityType::MINE) continue;
 
-                // Не стреляем по своим, но враги должны попадать по турелям
                 if (objects.count(bullet->ownerId)) {
-                    // Если пуля игрока попадает в постройку игрока - игнор
                     if (objects[bullet->ownerId]->type == EntityType::PLAYER &&
                         (tObj->type == EntityType::TURRET || tObj->type == EntityType::WALL)) continue;
                 }
 
                 float targetRadius = 25.0f;
-                if (tObj->type == EntityType::WALL) targetRadius = 35.0f; // Стена 50x50, радиус покрытия ~35
+                if (tObj->type == EntityType::WALL) targetRadius = 35.0f;
                 else if (tObj->type == EntityType::ENEMY) {
                     auto e = std::dynamic_pointer_cast<Enemy>(tObj);
                     if (e && e->enemyType == EnemyType::BOSS) targetRadius = 60.0f;
@@ -356,12 +343,10 @@ public:
                     pendingEvents.push_back({ 0, bPos, WHITE });
 
                     float dmg = 10.0f;
-                    // Если пуля от игрока - берем его урон
                     if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
                         auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
                         dmg = p->curDamage;
                     }
-                    // Если пуля от турели - берем урон турели
                     else if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::TURRET) {
                         auto t = std::dynamic_pointer_cast<Turret>(objects[bullet->ownerId]);
                         dmg = t->damage;
@@ -383,9 +368,28 @@ public:
                         else if (tObj->type == EntityType::ENEMY) {
                             tObj->destroyFlag = true;
                             auto e = std::dynamic_pointer_cast<Enemy>(tObj);
+
+                            for (auto& [pid, pObj] : objects) {
+                                if (pObj->type == EntityType::PLAYER) {
+                                    auto p = std::dynamic_pointer_cast<Player>(pObj);
+                                    p->AddXp(e->xpReward);
+                                    p->scrap += e->scrapReward;
+                                }
+                            }
+
                             if (objects.count(bullet->ownerId) && objects[bullet->ownerId]->type == EntityType::PLAYER) {
                                 auto p = std::dynamic_pointer_cast<Player>(objects[bullet->ownerId]);
-                                p->AddXp(e->xpReward); p->scrap += e->scrapReward;
+                                p->kills++;
+                            }
+
+                                                        int dropChance = 0;
+                            if (e->enemyType == EnemyType::BOSS) dropChance = 100;
+                            else if (e->enemyType == EnemyType::TANK) dropChance = 15;
+                            else dropChance = 0;
+
+                            if (rand() % 100 < dropChance) {
+                                auto art = std::make_shared<Artifact>(nextId++, ToRay(cpBodyGetPosition(tObj->body)), space);
+                                newArtifacts.push_back(art);
                             }
                         }
                         else if (tObj->type == EntityType::WALL || tObj->type == EntityType::TURRET) {
