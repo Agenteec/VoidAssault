@@ -8,7 +8,7 @@
 #include "raylib.h"
 #include "nlohmann/json.hpp"
 using json = nlohmann::json;
-
+#include "MasterServerIP.h"
 
 #ifndef MASTER_IP
 #define MASTER_IP "127.0.0.1"

@@ -8,7 +8,7 @@
     ServerHost.h
  "ServerHost.h"
  ServerHost.cpp
- "Utils/ConfigManager.h" "ECS/PhysicsUtils.h" "ECS/Enemy.h" "ECS/Artifact.h" "ECS/Construct.h")
+ "Utils/ConfigManager.h" "ECS/PhysicsUtils.h" "ECS/Enemy.h" "ECS/Artifact.h" "ECS/Construct.h" "Utils/MasterServerIP.h")
 target_include_directories(GameEngine PUBLIC ${CHIPMUNK2D_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${FIX_EXTERNAL_INCLUDE_DIR})
 target_include_directories(GameEngine PUBLIC ${BITSTERY_EXTERNAL_INCLUDE_DIR})
