@@ -45,10 +45,72 @@ void GameClient::ReturnToMenu() {
     useRelay = false;     ChangeScene(std::make_shared<MainMenuScene>(this));
 }
 
+void GameClient::ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId) {
+    useRelay = false;
+    relayLobbyId = 0;
+
+        TraceLog(LOG_INFO, ">> Connecting DIRECTLY to %s:%d...", ip.c_str(), port);
+
+        if (netClient->isConnected()) netClient->disconnect();
+
+    bool directSuccess = netClient->connect(ip, port);
+
+    if (directSuccess) {
+        TraceLog(LOG_INFO, ">> Direct connection SUCCESS!");
+        return;     }
+
+        TraceLog(LOG_WARNING, ">> Direct connection FAILED. Trying RELAY via Master Server...");
+
+    ClientConfig& cfg = ConfigManager::GetClient();
+
+        bool relaySuccess = netClient->connect(cfg.masterServerIp, cfg.masterServerPort);
+
+    if (relaySuccess) {
+        TraceLog(LOG_INFO, ">> Connected to Master Server for Relay. Lobby ID: %d", lobbyId);
+        useRelay = true;
+        relayLobbyId = lobbyId;
+
+                        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::JOIN);
+        JoinPacket jp; jp.name = ConfigManager::GetClient().playerName;
+        serializer.object(jp);
+        serializer.adapter().flush();
+
+        SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
+    else {
+        TraceLog(LOG_ERROR, ">> Relay connection FAILED. Could not connect to Master Server (%s:%d)",
+            cfg.masterServerIp.c_str(), cfg.masterServerPort);
+    }
+}
+
+void GameClient::SendGamePacket(DeliveryType type, StreamBuffer::Shared stream) {
+    if (!netClient || !netClient->isConnected()) return;
+
+    if (useRelay) {
+        RelayPacket relayPkt;
+        relayPkt.targetId = relayLobbyId;
+        relayPkt.isReliable = (type == DeliveryType::RELIABLE);
+        relayPkt.data = stream->buffer();
+
+        Buffer rBuf; OutputAdapter rAd(rBuf);
+        bitsery::Serializer<OutputAdapter> rSer(std::move(rAd));
+        rSer.value1b(GamePacket::RELAY_TO_SERVER);
+        rSer.object(relayPkt);
+        rSer.adapter().flush();
+
+        netClient->send(type, StreamBuffer::alloc(rBuf.data(), rBuf.size()));
+    }
+    else {
+        netClient->send(type, stream);
+    }
+}
+
 int GameClient::StartHost(int startPort, bool publicServer) {
     StopHost();
     localServer = std::make_unique<ServerHost>();
-        for (int p = startPort; p < startPort + 10; p++) {
+    for (int p = startPort; p < startPort + 10; p++) {
         if (localServer->Start(p, publicServer)) {
             TraceLog(LOG_INFO, "Local Server Started on port %d", p);
             return p;
@@ -64,61 +126,6 @@ void GameClient::StopHost() {
         localServer->Stop();
         localServer.reset();
         TraceLog(LOG_INFO, "Local Server Stopped.");
-    }
-}
-
-void GameClient::ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId) {
-    useRelay = false;
-    relayLobbyId = 0;
-
-    TraceLog(LOG_INFO, "Attempting direct connection to %s:%d", ip.c_str(), port);
-
-        bool directSuccess = netClient->connect(ip, port);
-
-    if (directSuccess) {
-        TraceLog(LOG_INFO, "Direct connection successful!");
-    }
-    else {
-        TraceLog(LOG_WARNING, "Direct connection failed. Falling back to Relay via Master Server.");
-
-                ClientConfig& cfg = ConfigManager::GetClient();
-        if (netClient->connect(cfg.masterServerIp, cfg.masterServerPort)) {
-            useRelay = true;
-            relayLobbyId = lobbyId;
-            TraceLog(LOG_INFO, "Connected to Master Server for Relay. Lobby ID: %d", lobbyId);
-
-                                    Buffer buffer; OutputAdapter adapter(buffer);
-            bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-            serializer.value1b(GamePacket::JOIN);
-            JoinPacket jp; jp.name = ConfigManager::GetClient().playerName;
-            serializer.object(jp);
-            serializer.adapter().flush();
-
-                        SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
-        }
-        else {
-            TraceLog(LOG_ERROR, "Failed to connect to Master Server (Relay unreachable).");
-        }
-    }
-}
-
-void GameClient::SendGamePacket(DeliveryType type, StreamBuffer::Shared stream) {
-    if (!netClient || !netClient->isConnected()) return;
-
-    if (useRelay) {
-                RelayPacket relayPkt;
-        relayPkt.targetId = relayLobbyId;
-        relayPkt.data = stream->buffer(); 
-        Buffer rBuf; OutputAdapter rAd(rBuf);
-        bitsery::Serializer<OutputAdapter> rSer(std::move(rAd));
-        rSer.value1b(GamePacket::RELAY_TO_SERVER);
-        rSer.object(relayPkt);
-        rSer.adapter().flush();
-
-        netClient->send(type, StreamBuffer::alloc(rBuf.data(), rBuf.size()));
-    }
-    else {
-                netClient->send(type, stream);
     }
 }
 
@@ -148,19 +155,16 @@ void GameClient::Run() {
             auto msgs = netClient->poll();
 
             for (auto& msg : msgs) {
-                                
                 if (msg->type() == MessageType::CONNECT) {
-                    if (!useRelay) {
-                        TraceLog(LOG_INFO, ">> CLIENT: Connected to server (Direct)!");
-                        if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                            ChangeScene(std::make_shared<GameplayScene>(this));
-                        }
+                    if (useRelay) {
+                        TraceLog(LOG_INFO, ">> CLIENT: Connected to Master (Relay Ready). Waiting for Game Init...");
                     }
                     else {
-                        TraceLog(LOG_INFO, ">> CLIENT: Connected to Master (Relay Mode Ready).");
-                                                if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
-                            ChangeScene(std::make_shared<GameplayScene>(this));
-                        }
+                        TraceLog(LOG_INFO, ">> CLIENT: Connected to Server directly!");
+                    }
+
+                                                            if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+                        ChangeScene(std::make_shared<GameplayScene>(this));
                     }
                 }
                 else if (msg->type() == MessageType::DISCONNECT) {
@@ -189,7 +193,7 @@ void GameClient::Run() {
                                     continue;                                 }
                             }
                             else {
-                                                                                                payload->seekg(offset);
+                                                                payload->seekg(offset);
                             }
                         }
                     }

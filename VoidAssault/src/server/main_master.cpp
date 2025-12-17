@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
 
     ENetServer::Shared server = ENetServer::alloc();
     int port = 8080;
-    if (server->start(port, 1024)) {
+        if (server->start(port, 1024)) {
         std::cout << "MASTER SERVER: Started on port " << port << std::endl;
     }
     else {
@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
     }
 
     while (server->isRunning()) {
-        auto msgs = server->poll();
+                        auto msgs = server->poll();
 
         double now = GetTime();
 
@@ -75,8 +75,6 @@ int main(int argc, char** argv) {
                         MasterRegisterPacket pkt; des.object(pkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
                             std::lock_guard<std::mutex> lock(lobbyMutex);
-
-
                             ActiveLobby lobby;
                             lobby.id = nextLobbyId++;
                             lobby.peerId = peerId;
@@ -86,8 +84,10 @@ int main(int argc, char** argv) {
                             lobby.currentPlayers = 0;
                             lobby.wave = 1;
                             lobby.lastHeartbeatTime = now;
-
                             lobby.ip = server->getPeerIP(peerId);
+
+                                                        size_t colon = lobby.ip.find(':');
+                            if (colon != std::string::npos) lobby.ip = lobby.ip.substr(0, colon);
 
                             lobbies[lobby.id] = lobby;
                             std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ")\n";
@@ -96,40 +96,43 @@ int main(int argc, char** argv) {
                     else if (type == GamePacket::RELAY_TO_SERVER) {
                         RelayPacket relayPkt; des.object(relayPkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            std::lock_guard<std::mutex> lock(lobbyMutex);
+                                                                                    std::unique_lock<std::mutex> lock(lobbyMutex);
                             if (lobbies.count(relayPkt.targetId)) {
                                 uint32_t serverPeerId = lobbies[relayPkt.targetId].peerId;
-
+                                lock.unlock(); 
                                 RelayPacket fwdPkt;
                                 fwdPkt.targetId = peerId;
-                                fwdPkt.data = relayPkt.data;
-
-                                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                                fwdPkt.isReliable = relayPkt.isReliable;
+                                fwdPkt.data = std::move(relayPkt.data); 
+                                Buffer fwdBuf; OutputAdapter ad(fwdBuf);
+                                bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                                 ser.value1b(GamePacket::RELAY_TO_SERVER);
                                 ser.object(fwdPkt);
                                 ser.adapter().flush();
 
-                                server->send(serverPeerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                                                                DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
+                                server->send(serverPeerId, dType, StreamBuffer::alloc(fwdBuf.data(), fwdBuf.size()));
                             }
                         }
                     }
                     else if (type == GamePacket::RELAY_TO_CLIENT) {
                         RelayPacket relayPkt; des.object(relayPkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
-
                             RelayPacket fwdPkt;
                             fwdPkt.targetId = 0;
-                            fwdPkt.data = relayPkt.data;
+                            fwdPkt.isReliable = relayPkt.isReliable;
+                            fwdPkt.data = std::move(relayPkt.data);
 
-                            Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                            Buffer fwdBuf; OutputAdapter ad(fwdBuf);
+                            bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                             ser.value1b(GamePacket::RELAY_TO_CLIENT);
                             ser.object(fwdPkt);
                             ser.adapter().flush();
 
-                            server->send(relayPkt.targetId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                            DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
+                            server->send(relayPkt.targetId, dType, StreamBuffer::alloc(fwdBuf.data(), fwdBuf.size()));
                         }
                     }
-
                     else if (type == GamePacket::MASTER_HEARTBEAT) {
                         MasterHeartbeatPacket pkt; des.object(pkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
@@ -158,20 +161,20 @@ int main(int argc, char** argv) {
                             info.wave = pair.second.wave;
                             res.lobbies.push_back(info);
                         }
-
                         Buffer resBuf; OutputAdapter resAd(resBuf);
                         bitsery::Serializer<OutputAdapter> ser(std::move(resAd));
                         ser.value1b(GamePacket::MASTER_LIST_RES);
                         ser.object(res);
                         ser.adapter().flush();
                         server->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(resBuf.data(), resBuf.size()));
-
                     }
                 }
             }
         }
 
-        {
+                static double lastCleanup = 0;
+        if (now - lastCleanup > 5.0) {
+            lastCleanup = now;
             std::lock_guard<std::mutex> lock(lobbyMutex);
             for (auto it = lobbies.begin(); it != lobbies.end(); ) {
                 if (now - it->second.lastHeartbeatTime > 30.0) {
@@ -184,7 +187,7 @@ int main(int argc, char** argv) {
             }
         }
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     enet_deinitialize();

@@ -153,6 +153,8 @@ endif()
 #include "scenes/GameplayScene.h"
 #include "../engine/Utils/ConfigManager.h"
 #include "Theme.h"
+#include <thread>
+#include <chrono>
 
 GameClient::GameClient() {
     ClientConfig& cfg = ConfigManager::GetClient();
@@ -190,14 +192,76 @@ void GameClient::ChangeScene(std::shared_ptr<Scene> newScene) {
 
 void GameClient::ReturnToMenu() {
     if (netClient) netClient->disconnect();
-    ChangeScene(std::make_shared<MainMenuScene>(this));
+    useRelay = false;     ChangeScene(std::make_shared<MainMenuScene>(this));
+}
+
+void GameClient::ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId) {
+    useRelay = false;
+    relayLobbyId = 0;
+
+        TraceLog(LOG_INFO, ">> Connecting DIRECTLY to %s:%d...", ip.c_str(), port);
+
+        if (netClient->isConnected()) netClient->disconnect();
+
+    bool directSuccess = netClient->connect(ip, port);
+
+    if (directSuccess) {
+        TraceLog(LOG_INFO, ">> Direct connection SUCCESS!");
+        return;     }
+
+        TraceLog(LOG_WARNING, ">> Direct connection FAILED. Trying RELAY via Master Server...");
+
+    ClientConfig& cfg = ConfigManager::GetClient();
+
+        bool relaySuccess = netClient->connect(cfg.masterServerIp, cfg.masterServerPort);
+
+    if (relaySuccess) {
+        TraceLog(LOG_INFO, ">> Connected to Master Server for Relay. Lobby ID: %d", lobbyId);
+        useRelay = true;
+        relayLobbyId = lobbyId;
+
+                        Buffer buffer; OutputAdapter adapter(buffer);
+        bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
+        serializer.value1b(GamePacket::JOIN);
+        JoinPacket jp; jp.name = ConfigManager::GetClient().playerName;
+        serializer.object(jp);
+        serializer.adapter().flush();
+
+        SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+    }
+    else {
+        TraceLog(LOG_ERROR, ">> Relay connection FAILED. Could not connect to Master Server (%s:%d)",
+            cfg.masterServerIp.c_str(), cfg.masterServerPort);
+    }
+}
+
+void GameClient::SendGamePacket(DeliveryType type, StreamBuffer::Shared stream) {
+    if (!netClient || !netClient->isConnected()) return;
+
+    if (useRelay) {
+        RelayPacket relayPkt;
+        relayPkt.targetId = relayLobbyId;
+        relayPkt.isReliable = (type == DeliveryType::RELIABLE);
+        relayPkt.data = stream->buffer();
+
+        Buffer rBuf; OutputAdapter rAd(rBuf);
+        bitsery::Serializer<OutputAdapter> rSer(std::move(rAd));
+        rSer.value1b(GamePacket::RELAY_TO_SERVER);
+        rSer.object(relayPkt);
+        rSer.adapter().flush();
+
+        netClient->send(type, StreamBuffer::alloc(rBuf.data(), rBuf.size()));
+    }
+    else {
+        netClient->send(type, stream);
+    }
 }
 
 int GameClient::StartHost(int startPort, bool publicServer) {
     StopHost();
     localServer = std::make_unique<ServerHost>();
     for (int p = startPort; p < startPort + 10; p++) {
-                if (localServer->Start(p, publicServer)) {
+        if (localServer->Start(p, publicServer)) {
             TraceLog(LOG_INFO, "Local Server Started on port %d", p);
             return p;
         }
@@ -228,8 +292,6 @@ float GameClient::GetUIScale() const {
 void GameClient::Run() {
     ChangeScene(std::make_shared<MainMenuScene>(this));
 
-    float inputSendTimer = 0.0f;
-    const float inputSendInterval = 1.0f / 60.0f;
     while (!WindowShouldClose()) {
         if (nextScene) {
             if (currentScene) currentScene->Exit();
@@ -244,8 +306,14 @@ void GameClient::Run() {
 
             for (auto& msg : msgs) {
                 if (msg->type() == MessageType::CONNECT) {
-                    TraceLog(LOG_INFO, ">> CLIENT: Connected to server!");
-                    if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
+                    if (useRelay) {
+                        TraceLog(LOG_INFO, ">> CLIENT: Connected to Master (Relay Ready). Waiting for Game Init...");
+                    }
+                    else {
+                        TraceLog(LOG_INFO, ">> CLIENT: Connected to Server directly!");
+                    }
+
+                                                            if (!std::dynamic_pointer_cast<GameplayScene>(currentScene)) {
                         ChangeScene(std::make_shared<GameplayScene>(this));
                     }
                 }
@@ -256,8 +324,33 @@ void GameClient::Run() {
                     }
                 }
                 else if (msg->type() == MessageType::DATA) {
+                    StreamBuffer::Shared payload = msg->stream();
+
+                                        if (useRelay) {
+                        const auto& buf = payload->buffer();
+                        size_t offset = payload->tellg();
+                        if (!buf.empty()) {
+                            InputAdapter ia(buf.begin() + offset, buf.end());
+                            bitsery::Deserializer<InputAdapter> des(std::move(ia));
+                            uint8_t pktType; des.value1b(pktType);
+
+                            if (pktType == GamePacket::RELAY_TO_CLIENT) {
+                                RelayPacket rp; des.object(rp);
+                                if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                                                                        payload = StreamBuffer::alloc(rp.data.data(), rp.data.size());
+                                }
+                                else {
+                                    continue;                                 }
+                            }
+                            else {
+                                                                payload->seekg(offset);
+                            }
+                        }
+                    }
+
                     if (currentScene) {
-                        currentScene->OnMessage(msg);
+                                                auto innerMsg = Message::alloc(msg->id(), MessageType::DATA, payload);
+                        currentScene->OnMessage(innerMsg);
                     }
                 }
             }
@@ -282,31 +375,41 @@ void GameClient::Run() {
 #include "../engine/ServerHost.h"
 #include "AudioManager.h"
 #include <memory>
+
 class Scene;
+
 class GameClient {
 public:
-	int screenWidth = 1280;
-	int screenHeight = 720;
-	ENetClient::Shared netClient;
-	std::unique_ptr<ServerHost> localServer;
-	AudioManager audio;
+    int screenWidth = 1280;
+    int screenHeight = 720;
 
-	std::shared_ptr<Scene> currentScene;
-	std::shared_ptr<Scene> nextScene;
-	GameClient();
-	~GameClient();
+    ENetClient::Shared netClient;
+    std::unique_ptr<ServerHost> localServer;
+    AudioManager audio;
 
-	void Run();
-	void ChangeScene(std::shared_ptr<Scene> newScene);
-	void ReturnToMenu();
+    std::shared_ptr<Scene> currentScene;
+    std::shared_ptr<Scene> nextScene;
 
-	int StartHost(int port, bool publicServer);
-	void StopHost();
+    bool useRelay = false;
+    uint32_t relayLobbyId = 0;
 
-	int GetWidth() const { return GetScreenWidth(); }
-	int GetHeight() const { return GetScreenHeight(); }
+    GameClient();
+    ~GameClient();
 
-	float GetUIScale() const;
+    void Run();
+    void ChangeScene(std::shared_ptr<Scene> newScene);
+    void ReturnToMenu();
+
+    void ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId);
+    void SendGamePacket(DeliveryType type, StreamBuffer::Shared stream);
+
+    int StartHost(int port, bool publicServer);
+    void StopHost();
+
+    int GetWidth() const { return GetScreenWidth(); }
+    int GetHeight() const { return GetScreenHeight(); }
+
+    float GetUIScale() const;
 };
 // client\main_client.cpp
 ﻿#define RAYGUI_IMPLEMENTATION
@@ -1603,7 +1706,7 @@ void MainMenuScene::DrawGUI() {
 
                 if (GuiButton({ itemRect.x + contentW - 110 * uiScale, itemRect.y + 5, 100 * uiScale, 30 * uiScale }, ConfigManager::Text("btn_join"))) {
                     std::string targetIp = (lobby.ip.empty() || lobby.ip == "Unknown") ? "127.0.0.1" : lobby.ip;
-                    game->netClient->connect(targetIp, lobby.port);
+                    game->ConnectToLobby(targetIp, lobby.port, lobby.id);
                 }
                 contentY += itemH + 5;
             }
@@ -2386,14 +2489,26 @@ namespace GamePacket {
         STATS,
         ACTION,
         ADMIN_CMD,
-        // Master Server Packets
         MASTER_REGISTER,
         MASTER_HEARTBEAT,
         MASTER_LIST_REQ,
-        MASTER_LIST_RES
+        MASTER_LIST_RES,
+        RELAY_TO_SERVER,
+        RELAY_TO_CLIENT
     };
 }
+struct RelayPacket {
+    uint32_t targetId;
+    bool isReliable;
+    std::vector<uint8_t> data;
 
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(targetId);
+        s.boolValue(isReliable);
+        s.container1b(data, 5000);
+    }
+};
 namespace ActionType {
     enum : uint8_t {
         BUILD_WALL = 1,
@@ -4237,10 +4352,17 @@ inline Vector2 ToRay(cpVect v) {
 #include <iostream>
 #include <chrono>
 #include <cmath>
+#include <algorithm>
 #include "Utils/ConfigManager.h"
+
 #if defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
 #endif
+
+// Проверка: является ли ID клиента "виртуальным" (Relay)
+static bool IsRelayClient(uint32_t id, const std::vector<uint32_t>& relayIds) {
+    return std::find(relayIds.begin(), relayIds.end(), id) != relayIds.end();
+}
 
 double GetSystemTime() {
     static auto start = std::chrono::high_resolution_clock::now();
@@ -4267,7 +4389,7 @@ bool ServerHost::Start(int port, bool registerOnMaster = true) {
 
     ServerConfig& cfg = ConfigManager::GetServer();
     gameScene.pvpFactor = cfg.pvpDamageFactor;
-    useMasterServer = registerOnMaster; 
+    useMasterServer = registerOnMaster;
     if (!netServer->start(port, cfg.maxPlayers)) return false;
 
     std::cout << "SERVER: Started on port " << port << (useMasterServer ? " (Public)" : " (Offline/LAN)") << std::endl;
@@ -4283,14 +4405,15 @@ void ServerHost::Stop() {
     if (serverThread.joinable()) serverThread.join();
     netServer->stop();
     if (masterClient) masterClient->disconnect();
+    relayClientIds.clear();
 }
 
 void ServerHost::RegisterWithMaster() {
-    if (!useMasterServer) return; 
+    if (!useMasterServer) return;
     ClientConfig& cCfg = ConfigManager::GetClient();
     ServerConfig& sCfg = ConfigManager::GetServer();
 
-        if (masterClient->connect(cCfg.masterServerIp, cCfg.masterServerPort)) {
+    if (masterClient->connect(cCfg.masterServerIp, cCfg.masterServerPort)) {
         std::cout << "SERVER: Connected to Master Server at " << cCfg.masterServerIp << ":" << cCfg.masterServerPort << "\n";
         connectedToMaster = true;
 
@@ -4308,15 +4431,13 @@ void ServerHost::RegisterWithMaster() {
         masterClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
     else {
-        std::cout << "SERVER: Failed to connect to Master Server (Will run in Offline mode).\n";
+        std::cout << "SERVER: Failed to connect to Master Server (Relay unavailable).\n";
         connectedToMaster = false;
     }
 }
 
 void ServerHost::UpdateMasterHeartbeat(float dt) {
     if (!useMasterServer || !connectedToMaster) return;
-
-    masterClient->poll();
 
     masterHeartbeatTimer += dt;
     if (masterHeartbeatTimer >= 5.0f) {
@@ -4341,13 +4462,91 @@ void ServerHost::UpdateMasterHeartbeat(float dt) {
     }
 }
 
+void ServerHost::SendToClient(uint32_t peerId, DeliveryType type, StreamBuffer::Shared stream) {
+    if (IsRelayClient(peerId, relayClientIds)) {
+        RelayPacket rp;
+        rp.targetId = peerId;
+        rp.isReliable = (type == DeliveryType::RELIABLE);
+        rp.data = stream->buffer();
+
+        Buffer buf; OutputAdapter ad(buf);
+        bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+        ser.value1b(GamePacket::RELAY_TO_CLIENT);
+        ser.object(rp);
+        ser.adapter().flush();
+
+        if (masterClient && masterClient->isConnected())
+            masterClient->send(type, StreamBuffer::alloc(buf.data(), buf.size()));
+    }
+    else {
+        netServer->send(peerId, type, stream);
+    }
+}
+
+void ServerHost::ProcessGamePacket(uint32_t peerId, StreamBuffer::Shared stream) {
+    const auto& buf = stream->buffer();
+    size_t offset = stream->tellg();
+    if (buf.empty() || offset >= buf.size()) return;
+
+    InputAdapter ia(buf.begin() + offset, buf.end());
+    bitsery::Deserializer<InputAdapter> des(std::move(ia));
+    uint8_t type; des.value1b(type);
+
+    if (type == GamePacket::JOIN) {
+        JoinPacket pkt; des.object(pkt);
+        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+            // Создаем или обновляем игрока
+            if (!gameScene.objects.count(peerId)) {
+                std::cout << "Client joined (ID: " << peerId << ")\n";
+                auto player = gameScene.CreatePlayerWithId(peerId);
+                player->name = pkt.name;
+
+                // Шлем INIT
+                InitPacket initPkt; initPkt.playerId = player->id;
+                Buffer outBuf; OutputAdapter ad(outBuf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+
+                SendToClient(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(outBuf.data(), outBuf.size()));
+            }
+            else {
+                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                if (p) p->name = pkt.name;
+            }
+        }
+    }
+    else if (type == GamePacket::INPUT) {
+        PlayerInputPacket inp; des.object(inp);
+        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+            if (gameScene.objects.count(peerId)) {
+                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
+                if (p) {
+                    p->ApplyInput(inp.movement);
+                    p->aimTarget = inp.aimTarget;
+                    p->wantsToShoot = inp.isShooting;
+                }
+            }
+        }
+    }
+    else if (type == GamePacket::ACTION) {
+        ActionPacket act; des.object(act);
+        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+            if (gameScene.objects.count(peerId)) {
+                if (act.type == ActionType::UPGRADE_BUILDING) gameScene.TryUpgrade(peerId, act.target);
+                else gameScene.TryBuild(peerId, act.type, act.target);
+            }
+        }
+    }
+    else if (type == GamePacket::ADMIN_CMD) {
+        AdminCommandPacket pkt; des.object(pkt);
+        if (des.adapter().error() == bitsery::ReaderError::NoError) gameScene.HandleAdminCommand(peerId, pkt);
+    }
+}
+
 void ServerHost::ServerLoop() {
     using clock = std::chrono::high_resolution_clock;
     auto lastTime = clock::now();
     double accumulator = 0.0;
-
     int tickRate = ConfigManager::GetServer().tickRate;
-    if (tickRate <= 0) tickRate = 60;
     double dt = 1.0 / (double)tickRate;
 
     double snapshotTimer = 0.0;
@@ -4357,40 +4556,88 @@ void ServerHost::ServerLoop() {
     waveTimer = 0.0;
     timeToNextWave = 5.0;
 
-        RegisterWithMaster();
+    RegisterWithMaster();
 
-    while (running && netServer->isRunning()) {
+    while (running) {
+        if (!netServer->isRunning()) break;
+
         auto currentTime = clock::now();
         double frameTime = std::chrono::duration<double>(currentTime - lastTime).count();
         lastTime = currentTime;
-
         if (frameTime > 0.25) frameTime = 0.25;
 
-                UpdateMasterHeartbeat((float)frameTime);
+        // 1. DIRECT POLL
+        auto msgs = netServer->poll();
+        for (auto& msg : msgs) {
+            uint32_t peerId = msg->peerId();
+            if (msg->type() == MessageType::CONNECT) {
+                std::cout << "Direct Client " << peerId << " connected.\n";
+                auto player = gameScene.CreatePlayerWithId(peerId);
+                InitPacket initPkt; initPkt.playerId = player->id;
+                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
+                netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+            }
+            else if (msg->type() == MessageType::DISCONNECT) {
+                std::cout << "Direct Client " << peerId << " disconnected.\n";
+                gameScene.objects.erase(peerId);
+            }
+            else if (msg->type() == MessageType::DATA) {
+                ProcessGamePacket(peerId, msg->stream());
+            }
+        }
 
-        if (netServer->numClients() == 0) {
+        // 2. RELAY POLL
+        UpdateMasterHeartbeat((float)frameTime);
+        if (masterClient) {
+            auto masterMsgs = masterClient->poll();
+            for (auto& msg : masterMsgs) {
+                if (msg->type() == MessageType::DATA) {
+                    const auto& buf = msg->stream()->buffer();
+                    size_t offset = msg->stream()->tellg();
+                    if (!buf.empty()) {
+                        InputAdapter ia(buf.begin() + offset, buf.end());
+                        bitsery::Deserializer<InputAdapter> des(std::move(ia));
+                        uint8_t type; des.value1b(type);
+
+                        if (type == GamePacket::RELAY_TO_SERVER) {
+                            RelayPacket rp; des.object(rp);
+                            if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                                uint32_t relayId = rp.targetId;
+                                if (!IsRelayClient(relayId, relayClientIds)) {
+                                    relayClientIds.push_back(relayId);
+                                }
+                                auto innerStream = StreamBuffer::alloc(rp.data.data(), rp.data.size());
+                                ProcessGamePacket(relayId, innerStream);
+                            }
+                        }
+                    }
+                }
+                else if (msg->type() == MessageType::DISCONNECT) {
+                    std::cout << "Disconnected from Master Server (Relay lost).\n";
+                    connectedToMaster = false;
+                    for (uint32_t rid : relayClientIds) gameScene.objects.erase(rid);
+                    relayClientIds.clear();
+                }
+            }
+        }
+
+        // LOGIC START
+        int totalClients = netServer->numClients() + (int)relayClientIds.size();
+        if (totalClients == 0) {
             bool hasEntities = false;
             for (auto& pair : gameScene.objects) {
                 if (pair.second->type != EntityType::PLAYER && pair.second->type != EntityType::WALL) {
                     hasEntities = true; break;
                 }
             }
-
             if (waveCount > 1 || hasEntities) {
                 auto it = gameScene.objects.begin();
                 while (it != gameScene.objects.end()) {
-                    if (it->second->type == EntityType::ENEMY ||
-                        it->second->type == EntityType::BULLET ||
-                        it->second->type == EntityType::ARTIFACT) {
-                        it = gameScene.objects.erase(it);
-                    }
-                    else {
-                        ++it;
-                    }
+                    if (it->second->type == EntityType::ENEMY || it->second->type == EntityType::BULLET) it = gameScene.objects.erase(it);
+                    else ++it;
                 }
-                waveCount = 1;
-                waveTimer = 0;
-                timeToNextWave = 5.0;
+                waveCount = 1; waveTimer = 0;
             }
         }
 
@@ -4399,83 +4646,17 @@ void ServerHost::ServerLoop() {
         statsTimer += frameTime;
         waveTimer += frameTime;
 
-        if (waveTimer >= timeToNextWave && netServer->numClients() > 0) {
+        if (waveTimer >= timeToNextWave && totalClients > 0) {
             waveTimer = 0.0;
             timeToNextWave = 20.0 + (waveCount * 2.0);
-
             int currentEnemies = 0;
             for (auto& [id, obj] : gameScene.objects) { if (obj->type == EntityType::ENEMY) currentEnemies++; }
-
             if (currentEnemies < 120) {
                 int enemiesToSpawn = 5 + (waveCount * 2);
                 if (enemiesToSpawn > 60) enemiesToSpawn = 60;
                 for (int i = 0; i < enemiesToSpawn; i++) gameScene.SpawnEnemy();
                 if (waveCount % 5 == 0) gameScene.SpawnEnemy(EnemyType::BOSS);
                 waveCount++;
-            }
-        }
-
-        auto msgs = netServer->poll();
-        for (auto& msg : msgs) {
-            uint32_t peerId = msg->peerId();
-
-            if (msg->type() == MessageType::CONNECT) {
-                std::cout << "Client " << peerId << " connected.\n";
-                auto player = gameScene.CreatePlayerWithId(peerId);
-
-                InitPacket initPkt; initPkt.playerId = player->id;
-                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
-                ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
-                netServer->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
-            }
-            else if (msg->type() == MessageType::DISCONNECT) {
-                std::cout << "Client " << peerId << " disconnected.\n";
-                gameScene.objects.erase(peerId);
-            }
-            else if (msg->type() == MessageType::DATA) {
-                const auto& buf = msg->stream()->buffer();
-                size_t offset = msg->stream()->tellg();
-                if (!buf.empty() && offset < buf.size()) {
-                    InputAdapter ia(buf.begin() + offset, buf.end());
-                    bitsery::Deserializer<InputAdapter> des(std::move(ia));
-                    uint8_t type; des.value1b(type);
-
-                    if (type == GamePacket::JOIN) {
-                        JoinPacket pkt; des.object(pkt);
-                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            if (gameScene.objects.count(peerId)) {
-                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                                if (p) p->name = pkt.name;
-                            }
-                        }
-                    }
-                    else if (type == GamePacket::INPUT) {
-                        PlayerInputPacket inp; des.object(inp);
-                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            if (gameScene.objects.count(peerId)) {
-                                auto p = std::dynamic_pointer_cast<Player>(gameScene.objects[peerId]);
-                                if (p) {
-                                    p->ApplyInput(inp.movement);
-                                    p->aimTarget = inp.aimTarget;
-                                    p->wantsToShoot = inp.isShooting;
-                                }
-                            }
-                        }
-                    }
-                    else if (type == GamePacket::ACTION) {
-                        ActionPacket act; des.object(act);
-                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            if (gameScene.objects.count(peerId)) {
-                                if (act.type == ActionType::UPGRADE_BUILDING) gameScene.TryUpgrade(peerId, act.target);
-                                else gameScene.TryBuild(peerId, act.type, act.target);
-                            }
-                        }
-                    }
-                    else if (type == GamePacket::ADMIN_CMD) {
-                        AdminCommandPacket pkt; des.object(pkt);
-                        if (des.adapter().error() == bitsery::ReaderError::NoError) gameScene.HandleAdminCommand(peerId, pkt);
-                    }
-                }
             }
         }
 
@@ -4491,10 +4672,10 @@ void ServerHost::ServerLoop() {
         if (!gameScene.pendingEvents.empty()) {
             for (const auto& evt : gameScene.pendingEvents) {
                 Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
-                ser.value1b(GamePacket::EVENT);
-                ser.object(evt);
-                ser.adapter().flush();
-                netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                ser.value1b(GamePacket::EVENT); ser.object(evt); ser.adapter().flush();
+                BroadcastSnapshot(); // Hack reuse, better make explicit broadcast
+                // Wait, use proper Broadcast below
+                BroadcastToAll(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
             }
             gameScene.pendingEvents.clear();
         }
@@ -4513,9 +4694,10 @@ void ServerHost::ServerLoop() {
                     stats.maxHealth = p->maxHealth; stats.damage = p->curDamage; stats.speed = p->curSpeed;
                     stats.scrap = p->scrap; stats.kills = p->kills; stats.inventory.assign(std::begin(p->inventory), std::end(p->inventory));
                     stats.isAdmin = p->isAdmin;
+
                     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                     ser.value1b(GamePacket::STATS); ser.object(stats); ser.adapter().flush();
-                    netServer->send(id, DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                    SendToClient(id, DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
                 }
             }
             statsTimer = 0;
@@ -4524,8 +4706,16 @@ void ServerHost::ServerLoop() {
     }
 }
 
+void ServerHost::BroadcastToAll(DeliveryType type, StreamBuffer::Shared stream) {
+    netServer->broadcast(type, stream);
+    if (!relayClientIds.empty() && masterClient && masterClient->isConnected()) {
+        for (uint32_t rid : relayClientIds) SendToClient(rid, type, stream);
+    }
+}
+
 void ServerHost::BroadcastSnapshot() {
-    if (netServer->numClients() == 0) return;
+    if (netServer->numClients() == 0 && relayClientIds.empty()) return;
+
     WorldSnapshotPacket snap;
     snap.serverTime = GetSystemTime();
     snap.wave = waveCount;
@@ -4551,7 +4741,8 @@ void ServerHost::BroadcastSnapshot() {
     }
     Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
     ser.value1b(GamePacket::SNAPSHOT); ser.object(snap); ser.adapter().flush();
-    netServer->broadcast(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+
+    BroadcastToAll(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
 }
 // engine\ServerHost.h
 ﻿#pragma once
@@ -4568,6 +4759,8 @@ void ServerHost::BroadcastSnapshot() {
 class ServerHost {
     ENetServer::Shared netServer;
     GameScene gameScene;
+
+    std::vector<uint32_t> relayClientIds;
 
     ENetClient::Shared masterClient;
     double masterHeartbeatTimer = 0.0;
@@ -4590,9 +4783,13 @@ public:
     void ServerLoop();
     void BroadcastSnapshot();
 
+
 private:
     void RegisterWithMaster();
     void UpdateMasterHeartbeat(float dt);
+    void ProcessGamePacket(uint32_t peerId, StreamBuffer::Shared stream);
+    void BroadcastToAll(DeliveryType type, StreamBuffer::Shared stream);
+    void SendToClient(uint32_t peerId, DeliveryType type, StreamBuffer::Shared stream);
 };
 // engine\ECS\Artifact.h
 ﻿#include "GameObject.h"
@@ -5971,12 +6168,52 @@ int main(int argc, char** argv) {
                             lobby.wave = 1;
                             lobby.lastHeartbeatTime = now;
 
-                            lobby.ip = "Unknown";
+                            lobby.ip = server->getPeerIP(peerId);
 
                             lobbies[lobby.id] = lobby;
                             std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ")\n";
                         }
                     }
+                    else if (type == GamePacket::RELAY_TO_SERVER) {
+                        RelayPacket relayPkt; des.object(relayPkt);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            std::lock_guard<std::mutex> lock(lobbyMutex);
+                            if (lobbies.count(relayPkt.targetId)) {
+                                uint32_t serverPeerId = lobbies[relayPkt.targetId].peerId;
+
+                                RelayPacket fwdPkt;
+                                fwdPkt.targetId = peerId;
+                                fwdPkt.isReliable = relayPkt.isReliable;
+                                fwdPkt.data = relayPkt.data;
+
+                                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                                ser.value1b(GamePacket::RELAY_TO_SERVER);
+                                ser.object(fwdPkt);
+                                ser.adapter().flush();
+
+                                DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
+                                server->send(serverPeerId, dType, StreamBuffer::alloc(buf.data(), buf.size()));
+                            }
+                        }
+                    }
+                    else if (type == GamePacket::RELAY_TO_CLIENT) {
+                        RelayPacket relayPkt; des.object(relayPkt);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            RelayPacket fwdPkt;
+                            fwdPkt.targetId = 0;
+                            fwdPkt.isReliable = relayPkt.isReliable;
+                            fwdPkt.data = relayPkt.data;
+
+                            Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                            ser.value1b(GamePacket::RELAY_TO_CLIENT);
+                            ser.object(fwdPkt);
+                            ser.adapter().flush();
+
+                            DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
+                            server->send(relayPkt.targetId, dType, StreamBuffer::alloc(buf.data(), buf.size()));
+                        }
+                    }
+
                     else if (type == GamePacket::MASTER_HEARTBEAT) {
                         MasterHeartbeatPacket pkt; des.object(pkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {

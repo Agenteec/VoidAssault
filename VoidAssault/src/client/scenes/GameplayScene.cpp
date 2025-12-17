@@ -31,6 +31,12 @@ void GameplayScene::Enter() {
     std::fill(myInventory.begin(), myInventory.end(), 255);
     lastFrameEntityIds.clear(); gunAnimOffset = 0.0f;
 
+    // Увеличиваем буфер интерполяции при игре через Relay, чтобы убрать дергания
+    if (game->useRelay) {
+        // Если SnapshotManager поддерживает изменение задержки, раскомментируйте:
+        // snapshotManager.interpolationDelay = 0.150; // 150ms для Relay
+    }
+
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     float joyY = h - 180.0f; float joyOffset = 220.0f;
     leftStick = std::make_unique<VirtualJoystick>(Vector2{ joyOffset, joyY }, 60.0f, 120.0f);
@@ -38,6 +44,7 @@ void GameplayScene::Enter() {
     rightStick->SetColors({ 200, 200, 200, 100 }, { 220, 50, 50, 200 });
 #endif
 
+    // ОТПРАВКА JOIN ПАКЕТА (ИСПРАВЛЕНО)
     if (game->netClient && game->netClient->isConnected()) {
         Buffer buffer; OutputAdapter adapter(buffer);
         bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
@@ -45,7 +52,9 @@ void GameplayScene::Enter() {
         JoinPacket jp; jp.name = ConfigManager::GetClient().playerName;
         serializer.object(jp);
         serializer.adapter().flush();
-        game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+
+        // ВАЖНО: Используем SendGamePacket вместо netClient->send
+        game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
 
@@ -61,7 +70,9 @@ void GameplayScene::SendAction(const ActionPacket& act) {
         serializer.value1b(GamePacket::ACTION);
         serializer.object(act);
         serializer.adapter().flush();
-        game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+
+        // ВАЖНО: Используем SendGamePacket
+        game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
 
@@ -73,7 +84,9 @@ void GameplayScene::SendAdminCmd(uint8_t cmd, uint32_t val) {
         AdminCommandPacket pkt = { cmd, val };
         serializer.object(pkt);
         serializer.adapter().flush();
-        game->netClient->send(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+
+        // ВАЖНО: Используем SendGamePacket
+        game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
 
@@ -103,6 +116,7 @@ void GameplayScene::OnMessage(Message::Shared msg) {
                 if (ent.id == myPlayerId) {
                     if (!isPredictedInit) { predictedPos = ent.position; isPredictedInit = true; }
                     else {
+                        // Плавная коррекция позиции клиента
                         float dist = Vector2Distance(predictedPos, ent.position);
                         if (dist > 150.0f) predictedPos = ent.position;
                         else predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
@@ -126,9 +140,11 @@ void GameplayScene::OnMessage(Message::Shared msg) {
     else if (packetTypeInt == GamePacket::EVENT) {
         EventPacket evt; deserializer.object(evt);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
-            if (evt.type == 0) particles.SpawnExplosion(evt.pos, 4, evt.color);             else if (evt.type == 1) particles.SpawnExplosion(evt.pos, 20, evt.color);             else if (evt.type == 2) {
-                                particles.SpawnExplosion(evt.pos, 15, evt.color);
-                                for (int i = 0; i < 360; i += 20) {
+            if (evt.type == 0) particles.SpawnExplosion(evt.pos, 4, evt.color);
+            else if (evt.type == 1) particles.SpawnExplosion(evt.pos, 20, evt.color);
+            else if (evt.type == 2) {
+                particles.SpawnExplosion(evt.pos, 15, evt.color);
+                for (int i = 0; i < 360; i += 20) {
                     float ang = i * DEG2RAD;
                     Vector2 vel = { cosf(ang) * 100.0f, sinf(ang) * 100.0f };
                     particles.Spawn(evt.pos, vel, evt.color, 4.0f, 0.5f);
@@ -154,12 +170,11 @@ void GameplayScene::Update(float dt) {
     float myRadius = 20.0f + (myLevel - 1) * 2.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
+    // Логика джойстиков... (без изменений)
     if (leftStick && rightStick) {
         leftStick->Update(); rightStick->Update();
         pkt.movement = leftStick->GetAxis();
-
         Vector2 aimDir = rightStick->GetAxis();
-
         if (selectedBuildType != 0) {
             Vector2 offset = { 100, 0 };
             if (Vector2Length(aimDir) > 0.1f) offset = Vector2Scale(aimDir, 300.0f);
@@ -178,6 +193,7 @@ void GameplayScene::Update(float dt) {
         }
     }
 #else
+    // Логика клавиатуры... (без изменений)
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
@@ -224,16 +240,28 @@ void GameplayScene::Update(float dt) {
         camera.target = Vector2Lerp(camera.target, predictedPos, 0.1f);
     }
 
+    // ОТПРАВКА INPUT ПАКЕТА (ИСПРАВЛЕНО)
     if (game->netClient && game->netClient->isConnected()) {
         Buffer buffer; OutputAdapter adapter(buffer); bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
-        serializer.value1b(GamePacket::INPUT); serializer.object(pkt); serializer.adapter().flush();
-        game->netClient->send(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
+        serializer.value1b(GamePacket::INPUT);
+        serializer.object(pkt);
+        serializer.adapter().flush();
+
+        // ВАЖНО: SendGamePacket с флагом UNRELIABLE
+        // SendGamePacket сам проставит isReliable=false для RelayPacket, если тип UNRELIABLE
+        game->SendGamePacket(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
+
+// ... Остальные методы Draw, DrawGUI, DrawLeaderboard и т.д. оставляем без изменений ...
+// (Чтобы не загромождать ответ, я их не дублирую, так как там только отрисовка)
+// Просто скопируйте оставшуюся часть файла из вашего исходника ниже функции Update.
 
 void GameplayScene::Draw() {
     BeginMode2D(camera);
     ClearBackground(Theme::COL_BACKGROUND);
+    // ... ваш код отрисовки ...
+    // Вставьте ваш существующий код Draw(), он корректен
     int gridW = 4000; int gridH = 4000;
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
     for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.3f));
@@ -265,6 +293,9 @@ void GameplayScene::Draw() {
 
     if (!snapshotManager.history.empty()) {
         double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
+        // Если Relay, можно чуть увеличить задержку рендера вручную здесь, если не меняли константу
+        if (game->useRelay) renderTime -= 0.1;
+
         const auto& latestEntities = snapshotManager.history.back().entities;
 
         for (const auto& ent : latestEntities) {
@@ -276,7 +307,7 @@ void GameplayScene::Draw() {
                 DrawDiepTank(predictedPos, predictedRot, Theme::COL_ACCENT, myRadius, myHealth, myMaxHealth, true, ConfigManager::GetClient().playerName);
                 continue;
             }
-
+            // ... (остальной код отрисовки сущностей без изменений) ...
             if (renderState.type == EntityType::PLAYER) {
                 float otherRadius = 20.0f + (renderState.level - 1) * 2.0f;
                 DrawDiepTank(renderState.position, renderState.rotation, Theme::COLOR_RED, otherRadius, renderState.health, renderState.maxHealth, false, renderState.name);
@@ -290,13 +321,11 @@ void GameplayScene::Draw() {
                 Color enemyColor = Theme::COLOR_RED; int sides = 3;
                 switch (renderState.subtype) {
                 case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break;
-                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;                                                         case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break;                 }
-
-                                if (renderState.subtype == EnemyType::TANK) sides = 5;
-
+                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;                                                         case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break;
+                }
+                if (renderState.subtype == EnemyType::TANK) sides = 5;
                 DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 });
                 DrawPoly(pos, sides, radius, rot, enemyColor);
-
                 float hpPct = renderState.health / renderState.maxHealth;
                 if (hpPct < 0.0f) hpPct = 0.0f;
                 if (hpPct < 1.0f) {
@@ -306,57 +335,36 @@ void GameplayScene::Draw() {
             }
             else if (renderState.type == EntityType::WALL) {
                 Rectangle r = { renderState.position.x - 25, renderState.position.y - 25, 50, 50 };
-
-                                float hpRatio = renderState.health / renderState.maxHealth;
+                float hpRatio = renderState.health / renderState.maxHealth;
                 Color baseColor = GRAY;
                 if (hpRatio < 0.5f) baseColor = DARKGRAY;
-
                 DrawRectangleRec(r, baseColor);
                 DrawRectangleLinesEx(r, 2, DARKGRAY);
-
-                                if (renderState.level >= 1) {
-                                        DrawRectangleLinesEx({ r.x + 5, r.y + 5, r.width - 10, r.height - 10 }, 1, LIGHTGRAY);
-                }
+                if (renderState.level >= 1) DrawRectangleLinesEx({ r.x + 5, r.y + 5, r.width - 10, r.height - 10 }, 1, LIGHTGRAY);
                 if (renderState.level >= 2) {
-                                        DrawLineEx({ r.x, r.y }, { r.x + r.width, r.y + r.height }, 2, BLACK);
+                    DrawLineEx({ r.x, r.y }, { r.x + r.width, r.y + r.height }, 2, BLACK);
                     DrawLineEx({ r.x + r.width, r.y }, { r.x, r.y + r.height }, 2, BLACK);
                 }
                 if (renderState.level >= 3) {
-                                        DrawRectangle(r.x - 2, r.y - 2, 10, 10, GOLD);
-                    DrawRectangle(r.x + r.width - 8, r.y - 2, 10, 10, GOLD);
-                    DrawRectangle(r.x - 2, r.y + r.height - 8, 10, 10, GOLD);
-                    DrawRectangle(r.x + r.width - 8, r.y + r.height - 8, 10, 10, GOLD);
+                    DrawRectangle(r.x - 2, r.y - 2, 10, 10, GOLD); DrawRectangle(r.x + r.width - 8, r.y - 2, 10, 10, GOLD);
+                    DrawRectangle(r.x - 2, r.y + r.height - 8, 10, 10, GOLD); DrawRectangle(r.x + r.width - 8, r.y + r.height - 8, 10, 10, GOLD);
                 }
-                                for (int i = 0; i < renderState.level; i++)
-                    DrawRectangle(r.x + i * 8 + 3, r.y + 2, 4, 4, Theme::COL_ACCENT);
-
-
-                                if (hpRatio < 1.0f) {
-                    DrawRectangle(r.x, r.y - 8, 50, 4, RED);
-                    DrawRectangle(r.x, r.y - 8, 50 * hpRatio, 4, GREEN);
+                for (int i = 0; i < renderState.level; i++) DrawRectangle(r.x + i * 8 + 3, r.y + 2, 4, 4, Theme::COL_ACCENT);
+                if (hpRatio < 1.0f) {
+                    DrawRectangle(r.x, r.y - 8, 50, 4, RED); DrawRectangle(r.x, r.y - 8, 50 * hpRatio, 4, GREEN);
                 }
             }
-
             else if (renderState.type == EntityType::TURRET) {
-                DrawCircleV(renderState.position, 20, PURPLE);
-                DrawCircleLines(renderState.position.x, renderState.position.y, 20, BLACK);
+                DrawCircleV(renderState.position, 20, PURPLE); DrawCircleLines(renderState.position.x, renderState.position.y, 20, BLACK);
                 DrawCircleV(renderState.position, 8, DARKPURPLE);
-
-                                if (renderState.level > 0) {
-                    int orbs = renderState.level;                     float time = (float)GetTime();
-                    float orbitRadius = 28.0f;
-
+                if (renderState.level > 0) {
+                    int orbs = renderState.level; float time = (float)GetTime(); float orbitRadius = 28.0f;
                     for (int i = 0; i < orbs; i++) {
                         float angle = (time * 3.0f) + (i * (360.0f / orbs) * DEG2RAD);
-                        Vector2 orbPos = {
-                            renderState.position.x + cosf(angle) * orbitRadius,
-                            renderState.position.y + sinf(angle) * orbitRadius
-                        };
-                        DrawCircleV(orbPos, 5, GOLD);
-                        DrawCircleLines(orbPos.x, orbPos.y, 5, ORANGE);
+                        Vector2 orbPos = { renderState.position.x + cosf(angle) * orbitRadius, renderState.position.y + sinf(angle) * orbitRadius };
+                        DrawCircleV(orbPos, 5, GOLD); DrawCircleLines(orbPos.x, orbPos.y, 5, ORANGE);
                     }
                 }
-
                 float hpPct = renderState.health / renderState.maxHealth;
                 if (hpPct < 1.0f) {
                     DrawRectangle(renderState.position.x - 20, renderState.position.y - 30, 40, 4, RED);
@@ -364,14 +372,11 @@ void GameplayScene::Draw() {
                 }
             }
             else if (renderState.type == EntityType::MINE) {
-                                float pulse = 1.0f + sinf((float)GetTime() * 5.0f) * 0.1f;
-                DrawCircleV(renderState.position, 15 * pulse, ORANGE);
-                DrawCircleLines(renderState.position.x, renderState.position.y, 15 * pulse, RED);
-
-                                DrawCircleV(renderState.position, 5, RED);
-
-                                                float splashRad = 100.0f + (renderState.level - 1) * 50.0f;
-                                DrawCircleV(renderState.position, splashRad, Fade(RED, 0.1f));
+                float pulse = 1.0f + sinf((float)GetTime() * 5.0f) * 0.1f;
+                DrawCircleV(renderState.position, 15 * pulse, ORANGE); DrawCircleLines(renderState.position.x, renderState.position.y, 15 * pulse, RED);
+                DrawCircleV(renderState.position, 5, RED);
+                float splashRad = 100.0f + (renderState.level - 1) * 50.0f;
+                DrawCircleV(renderState.position, splashRad, Fade(RED, 0.1f));
                 DrawRing(renderState.position, splashRad, splashRad + 1.0f, 0, 360, 32, Fade(RED, 0.3f));
             }
             else if (renderState.type == EntityType::ARTIFACT) {
@@ -407,33 +412,25 @@ void GameplayScene::Draw() {
 }
 
 void GameplayScene::DrawLeaderboard(const std::vector<EntityState>& entities) {
+    // ... Copy paste from your code ...
     if (!showLeaderboard) return;
     int w = GetScreenWidth();
     float uiScale = game->GetUIScale();
     float boardW = 200.0f * uiScale;
     float startX = w - boardW - 10;
-
     float startY = 80 * uiScale;
-
     std::vector<EntityState> players;
     for (const auto& e : entities) if (e.type == EntityType::PLAYER) players.push_back(e);
-
-    std::sort(players.begin(), players.end(), [](const EntityState& a, const EntityState& b) {
-        return a.kills > b.kills;
-        });
-
+    std::sort(players.begin(), players.end(), [](const EntityState& a, const EntityState& b) { return a.kills > b.kills; });
     float boardH = 30 * uiScale + (players.size() * 25.0f * uiScale);
     DrawRectangle(startX, startY, boardW, boardH, Fade(BLACK, 0.5f));
     DrawRectangleLines(startX, startY, boardW, boardH, Theme::COL_ACCENT);
-
     DrawText("LEADERBOARD", startX + 10 * uiScale, startY + 5 * uiScale, 20 * uiScale, Theme::COL_ACCENT);
-
     float y = startY + 30 * uiScale;
     for (const auto& p : players) {
         bool isMe = (p.id == myPlayerId);
         Color textColor = isMe ? YELLOW : WHITE;
         std::string displayName = p.name.empty() ? TextFormat("Player %d", p.id % 100) : p.name;
-
         DrawText(displayName.c_str(), startX + 10 * uiScale, y, 16 * uiScale, textColor);
         const char* score = TextFormat("%d", p.kills);
         DrawText(score, startX + boardW - MeasureText(score, 16 * uiScale) - 10 * uiScale, y, 16 * uiScale, textColor);
@@ -442,6 +439,8 @@ void GameplayScene::DrawLeaderboard(const std::vector<EntityState>& entities) {
 }
 
 void GameplayScene::DrawGUI() {
+    // ... Copy paste from your code ...
+    // В этом методе также замените SendAction при нажатии кнопки PLACE на мобилках!
     int w = GetScreenWidth(); int h = GetScreenHeight(); float uiScale = game->GetUIScale();
     GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale)); float padding = 20 * uiScale;
 
@@ -454,14 +453,14 @@ void GameplayScene::DrawGUI() {
     char waveText[32]; sprintf(waveText, "WAVE %d", currentWave);
     DrawText(waveText, (w - MeasureText(waveText, 30 * uiScale)) / 2, padding, 30 * uiScale, Theme::COL_ACCENT);
 
-        const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
+    const char* builds[] = { "Wall (10)", "Turret (50)", "Mine (25)" };
     int costs[] = { 10, 50, 25 };
     float bY = h - 200 * uiScale; float bX = w - 130 * uiScale;
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
     bY = h - 350 * uiScale; bX = w - 100 * uiScale;
 #endif
 
-        int myTurretCount = 0;
+    int myTurretCount = 0;
     if (!snapshotManager.history.empty()) {
         for (const auto& e : snapshotManager.history.back().entities) {
             if (e.type == EntityType::TURRET && e.ownerId == myPlayerId) myTurretCount++;
@@ -473,16 +472,12 @@ void GameplayScene::DrawGUI() {
         int type = i + 1;
         bool canAfford = myScrap >= costs[i];
         bool limitReached = (type == ActionType::BUILD_TURRET && myTurretCount >= 5);
-
         std::string label = builds[i];
         if (type == ActionType::BUILD_TURRET) label += TextFormat(" %d/5", myTurretCount);
-
         if (canAfford && !limitReached) {
             if (GuiButton(bRect, label.c_str())) selectedBuildType = (selectedBuildType == type) ? 0 : type;
         }
-        else {
-            GuiDisable(); GuiButton(bRect, label.c_str()); GuiEnable();
-        }
+        else { GuiDisable(); GuiButton(bRect, label.c_str()); GuiEnable(); }
         if (selectedBuildType == type) DrawRectangleLinesEx(bRect, 2, GREEN);
     }
 
@@ -496,18 +491,17 @@ void GameplayScene::DrawGUI() {
             Vector2 target = Vector2Add(predictedPos, offset);
 
             ActionPacket act; act.type = selectedBuildType; act.target = target;
-            SendAction(act);
+            SendAction(act); // Уже обновлено выше
             selectedBuildType = 0;
         }
     }
 #else
-    if (selectedBuildType != 0) {
-        DrawText("LMB: Build, RMB: Cancel", w - 250 * uiScale, h - 50 * uiScale, 16 * uiScale, WHITE);
-    }
+    if (selectedBuildType != 0) DrawText("LMB: Build, RMB: Cancel", w - 250 * uiScale, h - 50 * uiScale, 16 * uiScale, WHITE);
 #endif
 
     if (GuiButton(Rectangle{ w - 80 * uiScale - padding, padding, 80 * uiScale, 30 * uiScale }, "MENU")) game->ReturnToMenu();
 
+    // ... отрисовка XP бара, HP бара и инвентаря (без изменений) ...
     float barW = 500 * uiScale; if (barW > w * 0.6f) barW = w * 0.6f;
     float centerX = w / 2.0f; float bottomY = h - padding;
     float xpY = bottomY - 15 * uiScale;
@@ -554,6 +548,7 @@ void GameplayScene::DrawGUI() {
 }
 
 void GameplayScene::DrawAdminPanel() {
+    // ... Copy paste from your code (SendAdminCmd уже вызывает SendGamePacket) ...
     if (!showAdminPanel || !isAdmin) return;
     float uiScale = game->GetUIScale();
     float cx = GetScreenWidth() / 2.0f;
@@ -575,22 +570,20 @@ void GameplayScene::DrawAdminPanel() {
     y += 40 * uiScale;
     if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Spawn Boss")) SendAdminCmd(AdminCmdType::SPAWN_BOSS, 0);
     y += 40 * uiScale;
-        if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Clear Buildings")) SendAdminCmd(AdminCmdType::CLEAR_BUILDINGS, 0);
+    if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "Clear Buildings")) SendAdminCmd(AdminCmdType::CLEAR_BUILDINGS, 0);
     y += 40 * uiScale;
     if (GuiButton({ panel.x + 10, y, 280 * uiScale, btnH }, "RESET SERVER")) SendAdminCmd(AdminCmdType::RESET_SERVER, 0);
 }
 
 void GameplayScene::DrawMinimap(const std::vector<EntityState>& entities) {
+    // ... Copy paste from your code (отрисовка не менялась) ...
     float mapSize = 150.0f * game->GetUIScale();
     float padding = 10.0f * game->GetUIScale();
     Vector2 mapOrigin = { padding, padding };
-
     DrawRectangleV(mapOrigin, { mapSize, mapSize }, Fade(BLACK, 0.7f));
     DrawRectangleLinesEx({ mapOrigin.x, mapOrigin.y, mapSize, mapSize }, 2, WHITE);
-
     float worldSize = 4000.0f;
     float scale = mapSize / worldSize;
-
     for (const auto& e : entities) {
         Vector2 mapPos = { mapOrigin.x + e.position.x * scale, mapOrigin.y + e.position.y * scale };
         Color dotCol = WHITE;
@@ -598,7 +591,6 @@ void GameplayScene::DrawMinimap(const std::vector<EntityState>& entities) {
         else if (e.type == EntityType::PLAYER) dotCol = SKYBLUE;
         else if (e.type == EntityType::ENEMY) dotCol = RED;
         else continue;
-
         DrawCircleV(mapPos, 2.0f, dotCol);
     }
 }

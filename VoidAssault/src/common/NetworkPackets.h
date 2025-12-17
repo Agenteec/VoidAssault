@@ -26,11 +26,13 @@ namespace GamePacket {
 }
 struct RelayPacket {
     uint32_t targetId;
+    bool isReliable;
     std::vector<uint8_t> data;
 
     template <typename S>
     void serialize(S& s) {
         s.value4b(targetId);
+        s.boolValue(isReliable);
         s.container1b(data, 5000);
     }
 };

@@ -247,7 +247,7 @@ void MainMenuScene::DrawGUI() {
 
                 if (GuiButton({ itemRect.x + contentW - 110 * uiScale, itemRect.y + 5, 100 * uiScale, 30 * uiScale }, ConfigManager::Text("btn_join"))) {
                     std::string targetIp = (lobby.ip.empty() || lobby.ip == "Unknown") ? "127.0.0.1" : lobby.ip;
-                    game->netClient->connect(targetIp, lobby.port);
+                    game->ConnectToLobby(targetIp, lobby.port, lobby.id);
                 }
                 contentY += itemH + 5;
             }

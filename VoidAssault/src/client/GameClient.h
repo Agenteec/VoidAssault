@@ -5,35 +5,39 @@
 #include "../engine/ServerHost.h"
 #include "AudioManager.h"
 #include <memory>
+
 class Scene;
+
 class GameClient {
 public:
-	bool useRelay = false;
-	uint32_t relayLobbyId = 0;
-	int screenWidth = 1280;
-	int screenHeight = 720;
-	ENetClient::Shared netClient;
-	std::unique_ptr<ServerHost> localServer;
-	AudioManager audio;
+    int screenWidth = 1280;
+    int screenHeight = 720;
 
-	std::shared_ptr<Scene> currentScene;
-	std::shared_ptr<Scene> nextScene;
-	GameClient();
-	~GameClient();
+    ENetClient::Shared netClient;
+    std::unique_ptr<ServerHost> localServer;
+    AudioManager audio;
 
-	void Run();
-	void ChangeScene(std::shared_ptr<Scene> newScene);
-	void ReturnToMenu();
+    std::shared_ptr<Scene> currentScene;
+    std::shared_ptr<Scene> nextScene;
 
-	int StartHost(int port, bool publicServer);
-	void StopHost();
+    bool useRelay = false;
+    uint32_t relayLobbyId = 0;
 
-	void ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId);
+    GameClient();
+    ~GameClient();
 
-	int GetWidth() const { return GetScreenWidth(); }
-	int GetHeight() const { return GetScreenHeight(); }
+    void Run();
+    void ChangeScene(std::shared_ptr<Scene> newScene);
+    void ReturnToMenu();
 
-	void SendGamePacket(DeliveryType type, StreamBuffer::Shared stream);
+    void ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId);
+    void SendGamePacket(DeliveryType type, StreamBuffer::Shared stream);
 
-	float GetUIScale() const;
+    int StartHost(int port, bool publicServer);
+    void StopHost();
+
+    int GetWidth() const { return GetScreenWidth(); }
+    int GetHeight() const { return GetScreenHeight(); }
+
+    float GetUIScale() const;
 };
