@@ -1,5 +1,4 @@
-﻿// server\main_master.cpp
-#include "../common/enet/ENetServer.h"
+﻿#include "../common/enet/ENetServer.h"
 #include "../common/NetworkPackets.h"
 #include <iostream>
 #include <map>
@@ -8,10 +7,9 @@
 #include <chrono>
 #include <mutex>
 
-// Struct to hold server info internally
 struct ActiveLobby {
     uint32_t id;
-    std::string ip; // Public IP
+    std::string ip;
     uint16_t port;
     std::string name;
     uint8_t currentPlayers;
@@ -37,7 +35,7 @@ int main(int argc, char** argv) {
 
     ENetServer::Shared server = ENetServer::alloc();
     int port = 8080;
-    if (server->start(port)) {
+    if (server->start(port, 1024)) {
         std::cout << "MASTER SERVER: Started on port " << port << std::endl;
     }
     else {
@@ -55,7 +53,6 @@ int main(int argc, char** argv) {
 
             if (msg->type() == MessageType::DISCONNECT) {
                 std::lock_guard<std::mutex> lock(lobbyMutex);
-                // Remove lobby if this peer was hosting one
                 for (auto it = lobbies.begin(); it != lobbies.end(); ) {
                     if (it->second.peerId == peerId) {
                         std::cout << "Lobby removed (Disconnect): " << it->second.name << "\n";
@@ -79,16 +76,6 @@ int main(int argc, char** argv) {
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
                             std::lock_guard<std::mutex> lock(lobbyMutex);
 
-                            // Get IP from internal ENet peer if possible, or assume caller's public IP logic handled by ENet
-                            // Note: ENetServer wrapper doesn't expose getClient IP easily in the shared generic code, 
-                            // so we might assume the client connects directly. 
-                            // In a real scenario, we'd extract the remote IP from enet_peer.
-                            // For this "P2P" helper, we simply store the IP the master sees.
-                            // WARNING: Wrapper `addressToString` needed here but `ENetServer` hides clients map.
-                            // We will cheat and assume it works or just use a placeholder if testing locally.
-
-                            // Assuming client handles P2P or Direct IP.
-                            // We need to extend ENetServer to get IP, but for now let's assume valid packet.
 
                             ActiveLobby lobby;
                             lobby.id = nextLobbyId++;
@@ -100,13 +87,7 @@ int main(int argc, char** argv) {
                             lobby.wave = 1;
                             lobby.lastHeartbeatTime = now;
 
-                            // Hacky way to get IP since our wrapper hides it:
-                            // In a real implementation, you'd add `std::string getPeerIP(uint32_t id)` to ENetServer.
-                            // Here we will rely on client saying it, OR just assume "Same Host" for local testing,
-                            // OR simply fail to get IP without modifying ENetServer.h.
-                            // *Modification*: Let's assume we modified ENetServer.h to expose getPeerIP or similar.
-                            // Since we can't easily change the wrapper deeply in this snippet, let's just log it.
-                            lobby.ip = "Unknown"; // Needs ENet access
+                            lobby.ip = "Unknown";
 
                             lobbies[lobby.id] = lobby;
                             std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ")\n";
@@ -127,14 +108,13 @@ int main(int argc, char** argv) {
                         }
                     }
                     else if (type == GamePacket::MASTER_LIST_REQ) {
-                        // Send list back
                         std::lock_guard<std::mutex> lock(lobbyMutex);
                         MasterListResPacket res;
                         for (const auto& pair : lobbies) {
                             LobbyInfo info;
                             info.id = pair.second.id;
                             info.name = pair.second.name;
-                            info.ip = pair.second.ip; // Will be "Unknown" without ENet struct change, implies need for logic update
+                            info.ip = pair.second.ip;
                             info.port = pair.second.port;
                             info.currentPlayers = pair.second.currentPlayers;
                             info.maxPlayers = pair.second.maxPlayers;
@@ -149,17 +129,15 @@ int main(int argc, char** argv) {
                         ser.adapter().flush();
                         server->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(resBuf.data(), resBuf.size()));
 
-                        // Disconnect listing client afterwards to save slots? Optional.
                     }
                 }
             }
         }
 
-        // Prune dead lobbies
         {
             std::lock_guard<std::mutex> lock(lobbyMutex);
             for (auto it = lobbies.begin(); it != lobbies.end(); ) {
-                if (now - it->second.lastHeartbeatTime > 30.0) { // 30s timeout
+                if (now - it->second.lastHeartbeatTime > 30.0) {
                     std::cout << "Lobby timed out: " << it->second.name << "\n";
                     it = lobbies.erase(it);
                 }

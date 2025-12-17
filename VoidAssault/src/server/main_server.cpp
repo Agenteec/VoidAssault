@@ -29,7 +29,7 @@ int main() {
 #endif
 
     ServerHost server;
-    if (server.Start(7777)) {
+    if (server.Start(7777, 128)) {
         std::cout << "Dedicated Server started on port 7777.\n";
 
 #ifdef WIN32
