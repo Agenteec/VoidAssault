@@ -8,6 +8,8 @@
 class Scene;
 class GameClient {
 public:
+	bool useRelay = false;
+	uint32_t relayLobbyId = 0;
 	int screenWidth = 1280;
 	int screenHeight = 720;
 	ENetClient::Shared netClient;
@@ -26,8 +28,12 @@ public:
 	int StartHost(int port, bool publicServer);
 	void StopHost();
 
+	void ConnectToLobby(const std::string& ip, int port, uint32_t lobbyId);
+
 	int GetWidth() const { return GetScreenWidth(); }
 	int GetHeight() const { return GetScreenHeight(); }
+
+	void SendGamePacket(DeliveryType type, StreamBuffer::Shared stream);
 
 	float GetUIScale() const;
 };

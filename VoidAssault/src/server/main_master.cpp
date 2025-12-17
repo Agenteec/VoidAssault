@@ -87,12 +87,49 @@ int main(int argc, char** argv) {
                             lobby.wave = 1;
                             lobby.lastHeartbeatTime = now;
 
-                            lobby.ip = "Unknown";
+                            lobby.ip = server->getPeerIP(peerId);
 
                             lobbies[lobby.id] = lobby;
                             std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ")\n";
                         }
                     }
+                    else if (type == GamePacket::RELAY_TO_SERVER) {
+                        RelayPacket relayPkt; des.object(relayPkt);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            std::lock_guard<std::mutex> lock(lobbyMutex);
+                            if (lobbies.count(relayPkt.targetId)) {
+                                uint32_t serverPeerId = lobbies[relayPkt.targetId].peerId;
+
+                                RelayPacket fwdPkt;
+                                fwdPkt.targetId = peerId;
+                                fwdPkt.data = relayPkt.data;
+
+                                Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                                ser.value1b(GamePacket::RELAY_TO_SERVER);
+                                ser.object(fwdPkt);
+                                ser.adapter().flush();
+
+                                server->send(serverPeerId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                            }
+                        }
+                    }
+                    else if (type == GamePacket::RELAY_TO_CLIENT) {
+                        RelayPacket relayPkt; des.object(relayPkt);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+
+                            RelayPacket fwdPkt;
+                            fwdPkt.targetId = 0;
+                            fwdPkt.data = relayPkt.data;
+
+                            Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
+                            ser.value1b(GamePacket::RELAY_TO_CLIENT);
+                            ser.object(fwdPkt);
+                            ser.adapter().flush();
+
+                            server->send(relayPkt.targetId, DeliveryType::RELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
+                        }
+                    }
+
                     else if (type == GamePacket::MASTER_HEARTBEAT) {
                         MasterHeartbeatPacket pkt; des.object(pkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {

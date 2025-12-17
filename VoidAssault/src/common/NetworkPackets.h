@@ -16,14 +16,24 @@ namespace GamePacket {
         STATS,
         ACTION,
         ADMIN_CMD,
-        // Master Server Packets
         MASTER_REGISTER,
         MASTER_HEARTBEAT,
         MASTER_LIST_REQ,
-        MASTER_LIST_RES
+        MASTER_LIST_RES,
+        RELAY_TO_SERVER,
+        RELAY_TO_CLIENT
     };
 }
+struct RelayPacket {
+    uint32_t targetId;
+    std::vector<uint8_t> data;
 
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(targetId);
+        s.container1b(data, 5000);
+    }
+};
 namespace ActionType {
     enum : uint8_t {
         BUILD_WALL = 1,

@@ -13,6 +13,8 @@ class ServerHost {
     ENetServer::Shared netServer;
     GameScene gameScene;
 
+    std::vector<uint32_t> relayClientIds;
+
     ENetClient::Shared masterClient;
     double masterHeartbeatTimer = 0.0;
     bool connectedToMaster = false;
@@ -34,7 +36,11 @@ public:
     void ServerLoop();
     void BroadcastSnapshot();
 
+
 private:
     void RegisterWithMaster();
     void UpdateMasterHeartbeat(float dt);
+    void ProcessGamePacket(uint32_t peerId, StreamBuffer::Shared stream);
+    void BroadcastToAll(DeliveryType type, StreamBuffer::Shared stream);
+    void SendToClient(uint32_t peerId, DeliveryType type, StreamBuffer::Shared stream);
 };
