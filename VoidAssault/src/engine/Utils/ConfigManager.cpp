@@ -24,7 +24,7 @@ void ConfigManager::CreateDefaultConfig() {
 	config.client.favoriteServers.push_back({ "Localhost", "127.0.0.1", 7777 });
 	config.client.resolutionWidth = 1280;
 	config.client.resolutionHeight = 720;
-	config.client.masterServerIp = "127.0.0.1";
+	config.client.masterServerIp = MASTER_IP;
 	config.client.masterServerPort = 8080;
 	config.server.serverName = "My Void Server";
 	Save();
