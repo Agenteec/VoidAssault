@@ -31,10 +31,11 @@ void GameplayScene::Enter() {
     std::fill(myInventory.begin(), myInventory.end(), 255);
     lastFrameEntityIds.clear(); gunAnimOffset = 0.0f;
 
-    // Увеличиваем буфер интерполяции при игре через Relay, чтобы убрать дергания
-    if (game->useRelay) {
-        // Если SnapshotManager поддерживает изменение задержки, раскомментируйте:
-        // snapshotManager.interpolationDelay = 0.150; // 150ms для Relay
+            if (game->useRelay) {
+        snapshotManager.interpolationDelay = 0.200;
+    }
+    else {
+        snapshotManager.interpolationDelay = 0.100;
     }
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
@@ -44,16 +45,13 @@ void GameplayScene::Enter() {
     rightStick->SetColors({ 200, 200, 200, 100 }, { 220, 50, 50, 200 });
 #endif
 
-    // ОТПРАВКА JOIN ПАКЕТА (ИСПРАВЛЕНО)
-    if (game->netClient && game->netClient->isConnected()) {
+        if (!game->useRelay && game->netClient && game->netClient->isConnected()) {
         Buffer buffer; OutputAdapter adapter(buffer);
         bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
         serializer.value1b(GamePacket::JOIN);
         JoinPacket jp; jp.name = ConfigManager::GetClient().playerName;
         serializer.object(jp);
         serializer.adapter().flush();
-
-        // ВАЖНО: Используем SendGamePacket вместо netClient->send
         game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
@@ -70,8 +68,6 @@ void GameplayScene::SendAction(const ActionPacket& act) {
         serializer.value1b(GamePacket::ACTION);
         serializer.object(act);
         serializer.adapter().flush();
-
-        // ВАЖНО: Используем SendGamePacket
         game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
@@ -84,8 +80,6 @@ void GameplayScene::SendAdminCmd(uint8_t cmd, uint32_t val) {
         AdminCommandPacket pkt = { cmd, val };
         serializer.object(pkt);
         serializer.adapter().flush();
-
-        // ВАЖНО: Используем SendGamePacket
         game->SendGamePacket(DeliveryType::RELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
@@ -99,7 +93,6 @@ void GameplayScene::OnMessage(Message::Shared msg) {
     bitsery::Deserializer<InputAdapter> deserializer(std::move(adapter));
 
     uint8_t packetTypeInt = 0; deserializer.value1b(packetTypeInt);
-
     if (deserializer.adapter().error() != bitsery::ReaderError::NoError) return;
 
     if (packetTypeInt == GamePacket::INIT) {
@@ -111,12 +104,19 @@ void GameplayScene::OnMessage(Message::Shared msg) {
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             currentWave = snap.wave;
             snapshotManager.PushSnapshot(snap);
-            lastServerTime = snap.serverTime;
+
+                        if (lastServerTime == 0.0) {
+                lastServerTime = snap.serverTime;
+                clientTime = snap.serverTime - snapshotManager.interpolationDelay;
+            }
+            else {
+                lastServerTime = snap.serverTime;
+            }
+
             for (const auto& ent : snap.entities) {
                 if (ent.id == myPlayerId) {
                     if (!isPredictedInit) { predictedPos = ent.position; isPredictedInit = true; }
                     else {
-                        // Плавная коррекция позиции клиента
                         float dist = Vector2Distance(predictedPos, ent.position);
                         if (dist > 150.0f) predictedPos = ent.position;
                         else predictedPos = Vector2Lerp(predictedPos, ent.position, 0.1f);
@@ -127,7 +127,7 @@ void GameplayScene::OnMessage(Message::Shared msg) {
             }
         }
     }
-    else if (packetTypeInt == GamePacket::STATS) {
+        else if (packetTypeInt == GamePacket::STATS) {
         PlayerStatsPacket stats; deserializer.object(stats);
         if (deserializer.adapter().error() == bitsery::ReaderError::NoError) {
             myLevel = stats.level; myCurrentXp = stats.currentXp; myMaxXp = stats.maxXp;
@@ -158,19 +158,24 @@ void GameplayScene::Update(float dt) {
     if (gunAnimOffset > 0.0f) gunAnimOffset -= dt * 60.0f;
     particles.Update(dt);
 
-    clientTime += dt;
-    if (abs(clientTime - lastServerTime) > 2.0) clientTime = lastServerTime;
-    else clientTime = Lerp((float)clientTime, (float)lastServerTime, 0.05f);
+        clientTime += dt;
+    double targetTime = lastServerTime - snapshotManager.interpolationDelay;
+    double delta = targetTime - clientTime;
 
-    PlayerInputPacket pkt = {};
+        if (std::abs(delta) > 1.5) {
+        clientTime = targetTime;
+    }
+    else {
+                clientTime += delta * 0.1;
+    }
+
+        PlayerInputPacket pkt = {};
     pkt.movement = { 0, 0 }; pkt.aimTarget = { 0, 0 }; pkt.isShooting = false;
-
     float currentSpeed = (mySpeed > 0) ? mySpeed : 220.0f;
     const float MAP_SIZE = 4000.0f;
     float myRadius = 20.0f + (myLevel - 1) * 2.0f;
 
 #if defined(PLATFORM_ANDROID) || defined(ANDROID)
-    // Логика джойстиков... (без изменений)
     if (leftStick && rightStick) {
         leftStick->Update(); rightStick->Update();
         pkt.movement = leftStick->GetAxis();
@@ -193,7 +198,6 @@ void GameplayScene::Update(float dt) {
         }
     }
 #else
-    // Логика клавиатуры... (без изменений)
     if (IsKeyDown(KEY_W)) pkt.movement.y -= 1.0f;
     if (IsKeyDown(KEY_S)) pkt.movement.y += 1.0f;
     if (IsKeyDown(KEY_A)) pkt.movement.x -= 1.0f;
@@ -213,7 +217,6 @@ void GameplayScene::Update(float dt) {
             SendAction(act);
         }
     }
-
     if (IsKeyPressed(KEY_F1) && isAdmin) showAdminPanel = !showAdminPanel;
     if (IsKeyPressed(KEY_TAB)) showLeaderboard = !showLeaderboard;
 
@@ -240,28 +243,18 @@ void GameplayScene::Update(float dt) {
         camera.target = Vector2Lerp(camera.target, predictedPos, 0.1f);
     }
 
-    // ОТПРАВКА INPUT ПАКЕТА (ИСПРАВЛЕНО)
     if (game->netClient && game->netClient->isConnected()) {
         Buffer buffer; OutputAdapter adapter(buffer); bitsery::Serializer<OutputAdapter> serializer(std::move(adapter));
         serializer.value1b(GamePacket::INPUT);
         serializer.object(pkt);
         serializer.adapter().flush();
-
-        // ВАЖНО: SendGamePacket с флагом UNRELIABLE
-        // SendGamePacket сам проставит isReliable=false для RelayPacket, если тип UNRELIABLE
         game->SendGamePacket(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buffer.data(), buffer.size()));
     }
 }
 
-// ... Остальные методы Draw, DrawGUI, DrawLeaderboard и т.д. оставляем без изменений ...
-// (Чтобы не загромождать ответ, я их не дублирую, так как там только отрисовка)
-// Просто скопируйте оставшуюся часть файла из вашего исходника ниже функции Update.
-
 void GameplayScene::Draw() {
     BeginMode2D(camera);
     ClearBackground(Theme::COL_BACKGROUND);
-    // ... ваш код отрисовки ...
-    // Вставьте ваш существующий код Draw(), он корректен
     int gridW = 4000; int gridH = 4000;
     DrawRectangleLines(0, 0, gridW, gridH, GRAY);
     for (int i = 0; i <= gridW; i += 50) DrawLine(i, 0, i, gridH, Fade(Theme::COL_GRID, 0.3f));
@@ -292,10 +285,7 @@ void GameplayScene::Draw() {
         };
 
     if (!snapshotManager.history.empty()) {
-        double renderTime = clientTime - snapshotManager.INTERPOLATION_DELAY;
-        // Если Relay, можно чуть увеличить задержку рендера вручную здесь, если не меняли константу
-        if (game->useRelay) renderTime -= 0.1;
-
+        double renderTime = clientTime; 
         const auto& latestEntities = snapshotManager.history.back().entities;
 
         for (const auto& ent : latestEntities) {
@@ -307,7 +297,6 @@ void GameplayScene::Draw() {
                 DrawDiepTank(predictedPos, predictedRot, Theme::COL_ACCENT, myRadius, myHealth, myMaxHealth, true, ConfigManager::GetClient().playerName);
                 continue;
             }
-            // ... (остальной код отрисовки сущностей без изменений) ...
             if (renderState.type == EntityType::PLAYER) {
                 float otherRadius = 20.0f + (renderState.level - 1) * 2.0f;
                 DrawDiepTank(renderState.position, renderState.rotation, Theme::COLOR_RED, otherRadius, renderState.health, renderState.maxHealth, false, renderState.name);
@@ -321,7 +310,8 @@ void GameplayScene::Draw() {
                 Color enemyColor = Theme::COLOR_RED; int sides = 3;
                 switch (renderState.subtype) {
                 case EnemyType::FAST: enemyColor = { 255, 105, 180, 255 }; break;
-                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;                                                         case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break;
+                case EnemyType::TANK: enemyColor = { 139, 0, 0, 255 }; sides = 4; break;
+                case EnemyType::BOSS: enemyColor = { 128, 0, 128, 255 }; sides = 8; break;
                 }
                 if (renderState.subtype == EnemyType::TANK) sides = 5;
                 DrawPoly(pos, sides, radius + 4.0f, rot, { 85, 85, 85, 255 });
@@ -412,7 +402,6 @@ void GameplayScene::Draw() {
 }
 
 void GameplayScene::DrawLeaderboard(const std::vector<EntityState>& entities) {
-    // ... Copy paste from your code ...
     if (!showLeaderboard) return;
     int w = GetScreenWidth();
     float uiScale = game->GetUIScale();
@@ -439,8 +428,6 @@ void GameplayScene::DrawLeaderboard(const std::vector<EntityState>& entities) {
 }
 
 void GameplayScene::DrawGUI() {
-    // ... Copy paste from your code ...
-    // В этом методе также замените SendAction при нажатии кнопки PLACE на мобилках!
     int w = GetScreenWidth(); int h = GetScreenHeight(); float uiScale = game->GetUIScale();
     GuiSetStyle(DEFAULT, TEXT_SIZE, (int)(20 * uiScale)); float padding = 20 * uiScale;
 
@@ -491,7 +478,7 @@ void GameplayScene::DrawGUI() {
             Vector2 target = Vector2Add(predictedPos, offset);
 
             ActionPacket act; act.type = selectedBuildType; act.target = target;
-            SendAction(act); // Уже обновлено выше
+            SendAction(act);
             selectedBuildType = 0;
         }
     }
@@ -501,7 +488,6 @@ void GameplayScene::DrawGUI() {
 
     if (GuiButton(Rectangle{ w - 80 * uiScale - padding, padding, 80 * uiScale, 30 * uiScale }, "MENU")) game->ReturnToMenu();
 
-    // ... отрисовка XP бара, HP бара и инвентаря (без изменений) ...
     float barW = 500 * uiScale; if (barW > w * 0.6f) barW = w * 0.6f;
     float centerX = w / 2.0f; float bottomY = h - padding;
     float xpY = bottomY - 15 * uiScale;
@@ -548,7 +534,6 @@ void GameplayScene::DrawGUI() {
 }
 
 void GameplayScene::DrawAdminPanel() {
-    // ... Copy paste from your code (SendAdminCmd уже вызывает SendGamePacket) ...
     if (!showAdminPanel || !isAdmin) return;
     float uiScale = game->GetUIScale();
     float cx = GetScreenWidth() / 2.0f;
@@ -576,7 +561,6 @@ void GameplayScene::DrawAdminPanel() {
 }
 
 void GameplayScene::DrawMinimap(const std::vector<EntityState>& entities) {
-    // ... Copy paste from your code (отрисовка не менялась) ...
     float mapSize = 150.0f * game->GetUIScale();
     float padding = 10.0f * game->GetUIScale();
     Vector2 mapOrigin = { padding, padding };

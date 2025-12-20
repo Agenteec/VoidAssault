@@ -7,6 +7,8 @@
 #include <chrono>
 #include <mutex>
 
+const uint32_t RELAY_ID_MASK = 0x80000000;
+
 struct ActiveLobby {
     uint32_t id;
     std::string ip;
@@ -28,24 +30,18 @@ double GetTime() {
 }
 
 int main(int argc, char** argv) {
-    if (enet_initialize() != 0) {
-        std::cerr << "Failed to initialize ENet.\n";
-        return 1;
-    }
+    if (enet_initialize() != 0) return 1;
 
     ENetServer::Shared server = ENetServer::alloc();
-    int port = 8080;
-        if (server->start(port, 1024)) {
-        std::cout << "MASTER SERVER: Started on port " << port << std::endl;
+    if (server->start(8080, 2048)) {
+        std::cout << "MASTER SERVER: Started on port 8080" << std::endl;
     }
     else {
-        std::cerr << "MASTER SERVER: Failed to start on port " << port << std::endl;
         return -1;
     }
 
     while (server->isRunning()) {
-                        auto msgs = server->poll();
-
+        auto msgs = server->poll();
         double now = GetTime();
 
         for (auto& msg : msgs) {
@@ -55,7 +51,7 @@ int main(int argc, char** argv) {
                 std::lock_guard<std::mutex> lock(lobbyMutex);
                 for (auto it = lobbies.begin(); it != lobbies.end(); ) {
                     if (it->second.peerId == peerId) {
-                        std::cout << "Lobby removed (Disconnect): " << it->second.name << "\n";
+                        std::cout << "Lobby removed (Host Disconnect): " << it->second.name << "\n";
                         it = lobbies.erase(it);
                     }
                     else {
@@ -84,33 +80,76 @@ int main(int argc, char** argv) {
                             lobby.currentPlayers = 0;
                             lobby.wave = 1;
                             lobby.lastHeartbeatTime = now;
+
                             lobby.ip = server->getPeerIP(peerId);
-
-                                                        size_t colon = lobby.ip.find(':');
-                            if (colon != std::string::npos) lobby.ip = lobby.ip.substr(0, colon);
-
                             lobbies[lobby.id] = lobby;
-                            std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ")\n";
+                            std::cout << "Lobby Registered: " << lobby.name << " (ID: " << lobby.id << ") Public IP: " << lobby.ip << "\n";
+                        }
+                    }
+                    else if (type == GamePacket::P2P_REQUEST) {
+                        P2PRequestPacket req; des.object(req);
+                        if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            std::lock_guard<std::mutex> lock(lobbyMutex);
+                            if (lobbies.count(req.lobbyId)) {
+                                ActiveLobby& targetLobby = lobbies[req.lobbyId];
+
+                                std::string playerIp = server->getPeerIP(peerId);
+                                uint16_t playerPort = server->getPeerPort(peerId);
+
+                                if (targetLobby.ip.empty() || targetLobby.ip == "Unknown") {
+                                    std::cout << "[P2P] Error: Host IP is unknown\n";
+                                    continue;
+                                }
+
+                                P2PSignalPacket sigToPlayer;
+                                sigToPlayer.publicIp = targetLobby.ip;
+                                sigToPlayer.publicPort = targetLobby.port;
+                                sigToPlayer.isHost = false;
+
+                                Buffer bufP; OutputAdapter adP(bufP); bitsery::Serializer<OutputAdapter> serP(std::move(adP));
+                                serP.value1b(GamePacket::P2P_SIGNAL); serP.object(sigToPlayer); serP.adapter().flush();
+                                server->send(peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(bufP.data(), bufP.size()));
+
+                                P2PSignalPacket sigToHost;
+                                sigToHost.publicIp = playerIp;
+                                sigToHost.publicPort = playerPort;
+                                sigToHost.isHost = true;
+
+                                Buffer bufH; OutputAdapter adH(bufH); bitsery::Serializer<OutputAdapter> serH(std::move(adH));
+                                serH.value1b(GamePacket::P2P_SIGNAL); serH.object(sigToHost); serH.adapter().flush();
+                                server->send(targetLobby.peerId, DeliveryType::RELIABLE, StreamBuffer::alloc(bufH.data(), bufH.size()));
+
+                                std::cout << "[P2P Signaling] Player " << playerIp << ":" << playerPort
+                                    << " <-> Host " << targetLobby.ip << ":" << targetLobby.port << "\n";
+                            }
                         }
                     }
                     else if (type == GamePacket::RELAY_TO_SERVER) {
                         RelayPacket relayPkt; des.object(relayPkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                                                                                    std::unique_lock<std::mutex> lock(lobbyMutex);
-                            if (lobbies.count(relayPkt.targetId)) {
-                                uint32_t serverPeerId = lobbies[relayPkt.targetId].peerId;
-                                lock.unlock(); 
+                            uint32_t serverPeerId = 0;
+                            bool found = false;
+                            {
+                                std::lock_guard<std::mutex> lock(lobbyMutex);
+                                if (lobbies.count(relayPkt.targetId)) {
+                                    serverPeerId = lobbies[relayPkt.targetId].peerId;
+                                    found = true;
+                                }
+                            }
+
+                            if (found) {
                                 RelayPacket fwdPkt;
-                                fwdPkt.targetId = peerId;
+                                fwdPkt.targetId = peerId | RELAY_ID_MASK;
                                 fwdPkt.isReliable = relayPkt.isReliable;
-                                fwdPkt.data = std::move(relayPkt.data); 
+                                fwdPkt.data = std::move(relayPkt.data);
+
                                 Buffer fwdBuf; OutputAdapter ad(fwdBuf);
                                 bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                                 ser.value1b(GamePacket::RELAY_TO_SERVER);
                                 ser.object(fwdPkt);
                                 ser.adapter().flush();
 
-                                                                DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
+                                DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
                                 server->send(serverPeerId, dType, StreamBuffer::alloc(fwdBuf.data(), fwdBuf.size()));
                             }
                         }
@@ -118,6 +157,8 @@ int main(int argc, char** argv) {
                     else if (type == GamePacket::RELAY_TO_CLIENT) {
                         RelayPacket relayPkt; des.object(relayPkt);
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
+                            uint32_t targetClientPeerId = relayPkt.targetId & ~RELAY_ID_MASK;
+
                             RelayPacket fwdPkt;
                             fwdPkt.targetId = 0;
                             fwdPkt.isReliable = relayPkt.isReliable;
@@ -130,7 +171,7 @@ int main(int argc, char** argv) {
                             ser.adapter().flush();
 
                             DeliveryType dType = relayPkt.isReliable ? DeliveryType::RELIABLE : DeliveryType::UNRELIABLE;
-                            server->send(relayPkt.targetId, dType, StreamBuffer::alloc(fwdBuf.data(), fwdBuf.size()));
+                            server->send(targetClientPeerId, dType, StreamBuffer::alloc(fwdBuf.data(), fwdBuf.size()));
                         }
                     }
                     else if (type == GamePacket::MASTER_HEARTBEAT) {
@@ -172,7 +213,7 @@ int main(int argc, char** argv) {
             }
         }
 
-                static double lastCleanup = 0;
+        static double lastCleanup = 0;
         if (now - lastCleanup > 5.0) {
             lastCleanup = now;
             std::lock_guard<std::mutex> lock(lobbyMutex);
@@ -186,8 +227,7 @@ int main(int argc, char** argv) {
                 }
             }
         }
-
-                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
     enet_deinitialize();

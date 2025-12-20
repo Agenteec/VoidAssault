@@ -29,7 +29,7 @@ public:
     std::vector<Message::Shared> poll();
 
     void on(uint32_t, RequestHandler);
-
+    ENetHost* getHost() const { return host_; }
 private:
     void sendMessage(DeliveryType type, Message::Shared msg) const;
     void sendRequest(uint32_t responseId, StreamBuffer::Shared stream) const;

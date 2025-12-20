@@ -1,5 +1,4 @@
-﻿// common\NetworkPackets.h
-#pragma once
+﻿#pragma once
 #include "PacketSerialization.h"
 #include "raylib.h"
 #include <cstdint>
@@ -21,9 +20,33 @@ namespace GamePacket {
         MASTER_LIST_REQ,
         MASTER_LIST_RES,
         RELAY_TO_SERVER,
-        RELAY_TO_CLIENT
+        RELAY_TO_CLIENT,
+        P2P_SIGNAL = 16,
+        P2P_REQUEST = 17
     };
 }
+struct P2PSignalPacket {
+    std::string publicIp;
+    uint16_t publicPort;
+    std::string yourIp;
+    bool isHost;
+
+    template <typename S>
+    void serialize(S& s) {
+        s.text1b(publicIp, 64);
+        s.value2b(publicPort);
+        s.text1b(yourIp, 64);
+        s.boolValue(isHost);
+    }
+};
+
+struct P2PRequestPacket {
+    uint32_t lobbyId;
+    template <typename S>
+    void serialize(S& s) {
+        s.value4b(lobbyId);
+    }
+};
 struct RelayPacket {
     uint32_t targetId;
     bool isReliable;

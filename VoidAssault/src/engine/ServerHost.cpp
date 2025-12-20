@@ -11,7 +11,6 @@
 #include <signal.h>
 #endif
 
-// Проверка: является ли ID клиента "виртуальным" (Relay)
 static bool IsRelayClient(uint32_t id, const std::vector<uint32_t>& relayIds) {
     return std::find(relayIds.begin(), relayIds.end(), id) != relayIds.end();
 }
@@ -147,13 +146,11 @@ void ServerHost::ProcessGamePacket(uint32_t peerId, StreamBuffer::Shared stream)
     if (type == GamePacket::JOIN) {
         JoinPacket pkt; des.object(pkt);
         if (des.adapter().error() == bitsery::ReaderError::NoError) {
-            // Создаем или обновляем игрока
             if (!gameScene.objects.count(peerId)) {
                 std::cout << "Client joined (ID: " << peerId << ")\n";
                 auto player = gameScene.CreatePlayerWithId(peerId);
                 player->name = pkt.name;
 
-                // Шлем INIT
                 InitPacket initPkt; initPkt.playerId = player->id;
                 Buffer outBuf; OutputAdapter ad(outBuf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                 ser.value1b(GamePacket::INIT); ser.object(initPkt); ser.adapter().flush();
@@ -218,7 +215,6 @@ void ServerHost::ServerLoop() {
         lastTime = currentTime;
         if (frameTime > 0.25) frameTime = 0.25;
 
-        // 1. DIRECT POLL
         auto msgs = netServer->poll();
         for (auto& msg : msgs) {
             uint32_t peerId = msg->peerId();
@@ -239,7 +235,6 @@ void ServerHost::ServerLoop() {
             }
         }
 
-        // 2. RELAY POLL
         UpdateMasterHeartbeat((float)frameTime);
         if (masterClient) {
             auto masterMsgs = masterClient->poll();
@@ -256,8 +251,10 @@ void ServerHost::ServerLoop() {
                             RelayPacket rp; des.object(rp);
                             if (des.adapter().error() == bitsery::ReaderError::NoError) {
                                 uint32_t relayId = rp.targetId;
+
                                 if (!IsRelayClient(relayId, relayClientIds)) {
                                     relayClientIds.push_back(relayId);
+                                    std::cout << "Relay Client " << relayId << " registered.\n";
                                 }
                                 auto innerStream = StreamBuffer::alloc(rp.data.data(), rp.data.size());
                                 ProcessGamePacket(relayId, innerStream);
@@ -274,7 +271,6 @@ void ServerHost::ServerLoop() {
             }
         }
 
-        // LOGIC START
         int totalClients = netServer->numClients() + (int)relayClientIds.size();
         if (totalClients == 0) {
             bool hasEntities = false;
@@ -325,8 +321,6 @@ void ServerHost::ServerLoop() {
             for (const auto& evt : gameScene.pendingEvents) {
                 Buffer buf; OutputAdapter ad(buf); bitsery::Serializer<OutputAdapter> ser(std::move(ad));
                 ser.value1b(GamePacket::EVENT); ser.object(evt); ser.adapter().flush();
-                BroadcastSnapshot(); // Hack reuse, better make explicit broadcast
-                // Wait, use proper Broadcast below
                 BroadcastToAll(DeliveryType::UNRELIABLE, StreamBuffer::alloc(buf.data(), buf.size()));
             }
             gameScene.pendingEvents.clear();

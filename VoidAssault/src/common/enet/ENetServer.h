@@ -32,6 +32,8 @@ public:
 
     void on(uint32_t, RequestHandler);
     std::string getPeerIP(uint32_t id) const;
+    uint16_t getPeerPort(uint32_t id) const;
+    ENetHost* getHost() const { return host_; }
 private:
     ENetPeer* getClient(uint32_t) const;
     void sendMessage(uint32_t id, DeliveryType type, Message::Shared msg) const;

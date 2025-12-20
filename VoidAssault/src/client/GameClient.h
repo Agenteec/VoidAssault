@@ -40,4 +40,5 @@ public:
     int GetHeight() const { return GetScreenHeight(); }
 
     float GetUIScale() const;
+    void StartP2PPunch(const std::string& targetIp, uint16_t targetPort);
 };

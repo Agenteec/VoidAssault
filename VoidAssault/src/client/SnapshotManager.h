@@ -10,8 +10,7 @@ class SnapshotManager {
 public:
     std::deque<WorldSnapshotPacket> history;
 
-
-    const double INTERPOLATION_DELAY = 0.050;
+        double interpolationDelay = 0.050;
 
     float LerpAngle(float start, float end, float amount) {
         float difference = std::abs(end - start);
@@ -31,14 +30,17 @@ public:
 
         history.push_back(snap);
 
-        while (history.size() > 2 && history[0].serverTime < history.back().serverTime - 1.0) {
+                while (history.size() > 2 && history[0].serverTime < history.back().serverTime - 2.0) {
             history.pop_front();
         }
     }
 
-
     bool GetInterpolatedState(uint32_t entityId, double clientRenderTime, EntityState& outState) {
         if (history.empty()) return false;
+
+                if (clientRenderTime >= history.back().serverTime) {
+            return FindEntityInSnapshot(history.back(), entityId, outState);
+        }
 
         if (clientRenderTime < history.front().serverTime) {
             return FindEntityInSnapshot(history.front(), entityId, outState);
@@ -51,10 +53,6 @@ public:
 
         if (it == history.begin()) {
             return FindEntityInSnapshot(history.front(), entityId, outState);
-        }
-
-        if (it == history.end()) {
-            return FindEntityInSnapshot(history.back(), entityId, outState);
         }
 
         const auto& snapB = *it;
@@ -81,6 +79,8 @@ public:
             if (entB.type != EntityType::BULLET) {
                 outState.rotation = LerpAngle(entA.rotation, entB.rotation, t);
             }
+                        outState.health = Lerp(entA.health, entB.health, t);
+
             return true;
         }
 

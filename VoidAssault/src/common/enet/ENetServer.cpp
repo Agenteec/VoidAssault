@@ -18,18 +18,30 @@ std::string addressToString(const ENetAddress* address)
 {
     char ip_address_str[256];
     enet_address_get_host_ip(address, ip_address_str, sizeof(ip_address_str));
-    return std::string(ip_address_str);
+    std::string ip = ip_address_str;
+    if (ip.find("::ffff:") == 0) {
+        ip = ip.substr(7);
+    }
+    return ip;
 }
-ENetServer::Shared ENetServer::alloc()
-{
-    return std::make_shared<ENetServer>();
-}
+
 std::string ENetServer::getPeerIP(uint32_t id) const {
     ENetPeer* peer = getClient(id);
     if (peer) {
         return addressToString(&peer->address);
     }
-    return "Unknown";
+    return "127.0.0.1";
+}
+uint16_t ENetServer::getPeerPort(uint32_t id) const {
+    ENetPeer* peer = getClient(id);
+    if (peer) {
+        return peer->address.port;
+    }
+    return 0;
+}
+ENetServer::Shared ENetServer::alloc()
+{
+    return std::make_shared<ENetServer>();
 }
 ENetServer::ENetServer()
     : host_(nullptr)

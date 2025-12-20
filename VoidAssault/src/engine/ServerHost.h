@@ -35,7 +35,8 @@ public:
 
     void ServerLoop();
     void BroadcastSnapshot();
-
+    bool isRunning() const { return running; }
+    ENetServer::Shared getNetServer() { return netServer; }
 
 private:
     void RegisterWithMaster();
