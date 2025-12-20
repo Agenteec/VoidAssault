@@ -50,13 +50,16 @@ struct P2PRequestPacket {
 struct RelayPacket {
     uint32_t targetId;
     bool isReliable;
+    bool isCompressed = false;
     std::vector<uint8_t> data;
 
     template <typename S>
     void serialize(S& s) {
         s.value4b(targetId);
         s.boolValue(isReliable);
-        s.container1b(data, 5000);
+        s.boolValue(isCompressed);
+
+        s.container1b(data, 1048576);
     }
 };
 namespace ActionType {
@@ -294,7 +297,7 @@ struct WorldSnapshotPacket {
     void serialize(S& s) {
         s.value8b(serverTime);
         s.value4b(wave);
-        s.container(entities, 10000);
+        s.container(entities, 40000);
     }
 };
 

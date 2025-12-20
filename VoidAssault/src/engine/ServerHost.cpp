@@ -6,7 +6,7 @@
 #include <cmath>
 #include <algorithm>
 #include "Utils/ConfigManager.h"
-
+#include "common/CompressionHelper.h"
 #if defined(__linux__) || defined(__APPLE__)
 #include <signal.h>
 #endif
@@ -118,9 +118,27 @@ void ServerHost::SendToClient(uint32_t peerId, DeliveryType type, StreamBuffer::
         RelayPacket rp;
         rp.targetId = peerId;
         rp.isReliable = (type == DeliveryType::RELIABLE);
-        rp.data = stream->buffer();
 
-        Buffer buf; OutputAdapter ad(buf);
+        const auto& rawData = stream->buffer();
+
+        if (rawData.size() > 128) {
+            std::vector<uint8_t> compressed = CompressionHelper::Compress(rawData);
+            if (!compressed.empty()) {
+                rp.data = std::move(compressed);
+                rp.isCompressed = true;
+            }
+            else {
+                rp.data = rawData;
+                rp.isCompressed = false;
+            }
+        }
+        else {
+            rp.data = rawData;
+            rp.isCompressed = false;
+        }
+
+        Buffer buf;
+        OutputAdapter ad(buf);
         bitsery::Serializer<OutputAdapter> ser(std::move(ad));
         ser.value1b(GamePacket::RELAY_TO_CLIENT);
         ser.object(rp);

@@ -5,7 +5,7 @@
 #include "Theme.h"
 #include <thread>
 #include <chrono>
-
+#include "common/CompressionHelper.h"
 GameClient::GameClient() {
     ClientConfig& cfg = ConfigManager::GetClient();
     screenWidth = cfg.resolutionWidth;
@@ -216,8 +216,21 @@ void GameClient::Run() {
                     if (useRelay && pktType == GamePacket::RELAY_TO_CLIENT) {
                         RelayPacket rp;
                         des.object(rp);
+
                         if (des.adapter().error() == bitsery::ReaderError::NoError) {
-                            payload = StreamBuffer::alloc(rp.data.data(), rp.data.size());
+                            if (rp.isCompressed) {
+                                std::vector<uint8_t> decompressed = CompressionHelper::Decompress(rp.data);
+                                if (!decompressed.empty()) {
+                                    payload = StreamBuffer::alloc(decompressed.data(), decompressed.size());
+                                }
+                                else {
+                                    TraceLog(LOG_ERROR, "Failed to decompress Relay packet!");
+                                    continue;
+                                }
+                            }
+                            else {
+                                payload = StreamBuffer::alloc(rp.data.data(), rp.data.size());
+                            }
                         }
                         else {
                             continue;

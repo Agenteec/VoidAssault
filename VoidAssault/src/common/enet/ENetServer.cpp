@@ -1,5 +1,4 @@
 ﻿#include "enet/ENetServer.h"
-
 #include "Common.h"
 #include "time/Time.h"
 
@@ -63,7 +62,7 @@ bool ENetServer::start(uint32_t port, uint32_t maxClients)
     address.port = (enet_uint16)port;
 
     host_ = enet_host_create(&address, (size_t)maxClients, NUM_CHANNELS, 0, 0);
-
+	enet_host_compress(host_, nullptr);
     if (host_ == nullptr) {
         LOG_ERROR("Failed to create ENet server host (Port might be busy)");
         return false;

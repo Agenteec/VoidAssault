@@ -13,3 +13,6 @@
 [submodule "VoidAssault/external/bitsery"]
 	path = VoidAssault/external/bitsery
 	url = https://github.com/fraillt/bitsery.git
+[submodule "VoidAssault/external/lz4"]
+	path = VoidAssault/external/lz4
+	url = https://github.com/lz4/lz4.git
